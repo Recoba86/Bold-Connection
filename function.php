@@ -2009,24 +2009,29 @@ function addFieldToTable($tableName, $fieldName, $defaultValue = null, $datatype
 
 function outtypepanel($typepanel, $message)
 {
-    global $from_id, $optionMarzban, $optionX_ui_single, $optionhiddfy, $optionalireza, $optionalireza_single, $optionmarzneshin, $option_mikrotik, $optionwg, $options_ui, $optioneylanpanel, $optionibsng;
-    if ($typepanel == "marzban") {
+    global $from_id, $optionMarzban, $optionX_ui_single, $optionX_ui_cluster, $optionhiddfy, $optionalireza, $optionalireza_single, $optionmarzneshin, $option_mikrotik, $optionwg, $options_ui, $optioneylanpanel, $optionibsng;
+    $panelType = is_array($typepanel) ? ($typepanel['type'] ?? '') : $typepanel;
+    if ($panelType == "marzban") {
         sendmessage($from_id, $message, $optionMarzban, 'HTML');
-    } elseif ($typepanel == "x-ui_single") {
-        sendmessage($from_id, $message, $optionX_ui_single, 'HTML');
-    } elseif ($typepanel == "hiddify") {
+    } elseif ($panelType == "x-ui_single") {
+        $keyboard = $optionX_ui_single;
+        if (is_array($typepanel) && ($typepanel['panel_mode'] ?? 'single') === 'cluster') {
+            $keyboard = $optionX_ui_cluster;
+        }
+        sendmessage($from_id, $message, $keyboard, 'HTML');
+    } elseif ($panelType == "hiddify") {
         sendmessage($from_id, $message, $optionhiddfy, 'HTML');
-    } elseif ($typepanel == "alireza_single") {
+    } elseif ($panelType == "alireza_single") {
         sendmessage($from_id, $message, $optionalireza_single, 'HTML');
-    } elseif ($typepanel == "marzneshin") {
+    } elseif ($panelType == "marzneshin") {
         sendmessage($from_id, $message, $optionmarzneshin, 'HTML');
-    } elseif ($typepanel == "WGDashboard") {
+    } elseif ($panelType == "WGDashboard") {
         sendmessage($from_id, $message, $optionwg, 'HTML');
-    } elseif ($typepanel == "s_ui") {
+    } elseif ($panelType == "s_ui") {
         sendmessage($from_id, $message, $options_ui, 'HTML');
-    } elseif ($typepanel == "ibsng") {
+    } elseif ($panelType == "ibsng") {
         sendmessage($from_id, $message, $optionibsng, 'HTML');
-    } elseif ($typepanel == "mikrotik") {
+    } elseif ($panelType == "mikrotik") {
         sendmessage($from_id, $message, $option_mikrotik, 'HTML');
     }
 }

@@ -364,6 +364,9 @@ try {
         changeloc varchar(60) NULL,
         on_hold_test varchar(60) NOT NULL,
         version_panel varchar(60) NOT NULL,
+        panel_mode varchar(20) NOT NULL DEFAULT 'single',
+        nodes_synced_at varchar(20) NULL,
+        node_balancer varchar(20) NOT NULL DEFAULT 'all',
         customvolume TEXT NULL,
         hide_user TEXT NULL)
         ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci");
@@ -414,6 +417,9 @@ try {
         addFieldToTable("marzban_panel", "MethodUsername", "آیدی عددی + حروف و عدد رندوم", "VARCHAR(100)");
         addFieldToTable("marzban_panel", "datelogin", null, "TEXT");
         addFieldToTable("marzban_panel", "api_token", null, "TEXT");
+        addFieldToTable("marzban_panel", "panel_mode", "single", "VARCHAR(20)");
+        addFieldToTable("marzban_panel", "nodes_synced_at", null, "VARCHAR(20)");
+        addFieldToTable("marzban_panel", "node_balancer", "all", "VARCHAR(20)");
         addFieldToTable("marzban_panel", "val_usertest", "100", "VARCHAR(50)");
         addFieldToTable("marzban_panel", "time_usertest", "1", "VARCHAR(50)");
         addFieldToTable("marzban_panel", "secret_code", null, "VARCHAR(200)");
@@ -445,6 +451,39 @@ try {
             ]);
             $next_num++;
         }
+    }
+} catch (PDOException $e) {
+    error_log('table.php migration error: ' . $e->getMessage());
+}
+
+//-----------------------------------------------------------------
+try {
+    $tableName = 'panel_nodes';
+    $stmt = $pdo->prepare("SELECT 1 FROM information_schema.tables WHERE table_name = :tableName");
+    $stmt->bindParam(':tableName', $tableName);
+    $stmt->execute();
+    $tableExists = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$tableExists) {
+        $stmt = $pdo->prepare("CREATE TABLE panel_nodes (
+        id INT(10) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        code_panel varchar(200) NOT NULL,
+        remote_id INT(10) NOT NULL,
+        name varchar(200) NOT NULL,
+        scheme varchar(10) NOT NULL,
+        host varchar(255) NOT NULL,
+        port INT NOT NULL,
+        base_path varchar(255) NULL,
+        status varchar(20) NOT NULL DEFAULT 'unknown',
+        cpu DECIMAL(5,2) NULL,
+        mem DECIMAL(5,2) NULL,
+        enabled TINYINT(1) NOT NULL DEFAULT 1,
+        display_name varchar(200) NULL,
+        sublink_template TEXT NULL,
+        last_synced_at INT NULL,
+        UNIQUE KEY uniq_panel_remote (code_panel, remote_id),
+        KEY idx_code_panel (code_panel))
+        ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci");
+        $stmt->execute();
     }
 } catch (PDOException $e) {
     error_log('table.php migration error: ' . $e->getMessage());
