@@ -106,19 +106,25 @@ The **only** supported installer is `install.sh` in **Recoba86/Bold-Connection**
 - Root access
 - Domain DNS → server IP
 - Telegram bot token (@BotFather)
-- GitHub PAT with `repo` scope (private repository)
+- GitHub PAT only if the repository is **private**
 
-### Install commands
+### Install commands (public repository)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Recoba86/Bold-Connection/main/install.sh -o /tmp/bold-install.sh
+head -5 /tmp/bold-install.sh   # must say "Bold Connection"
+sudo bash /tmp/bold-install.sh
+```
+
+### Install commands (private repository)
 
 ```bash
 export GITHUB_PAT="ghp_YOUR_TOKEN_HERE"
-
 curl -fsSL \
   -H "Authorization: token ${GITHUB_PAT}" \
   -H "Accept: application/vnd.github.raw" \
   "https://raw.githubusercontent.com/Recoba86/Bold-Connection/main/install.sh" \
   -o /tmp/bold-install.sh
-
 sudo bash /tmp/bold-install.sh
 ```
 

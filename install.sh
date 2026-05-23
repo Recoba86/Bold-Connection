@@ -174,31 +174,49 @@ load_state() {
 }
 
 # ---------------------------------------------------------------------------
-# GitHub authentication
+# GitHub clone URL (public repo or PAT / gh CLI for private)
 # ---------------------------------------------------------------------------
-resolve_github_pat() {
-    if [[ -n "${GITHUB_PAT}" ]]; then
+get_git_clone_url() {
+    if [[ -n "${GITHUB_PAT:-}" ]]; then
+        echo "https://x-access-token:${GITHUB_PAT}@github.com/${REPO_SLUG}.git"
         return 0
     fi
 
     if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-        GITHUB_PAT="$(gh auth token 2>/dev/null || true)"
-        if [[ -n "${GITHUB_PAT}" ]]; then
+        local gh_token
+        gh_token="$(gh auth token 2>/dev/null || true)"
+        if [[ -n "${gh_token}" ]]; then
             log_info "Using GitHub CLI authentication."
+            echo "https://x-access-token:${gh_token}@github.com/${REPO_SLUG}.git"
             return 0
         fi
     fi
 
-    echo ""
-    log_info "Private repository requires a GitHub Personal Access Token (scope: repo)."
-    prompt_with_validation "GitHub PAT" GITHUB_PAT '^gh[pousr]_[A-Za-z0-9_]+$' "" true
+    log_info "No GitHub token — cloning as public repository (${REPO_SLUG})."
+    echo "https://github.com/${REPO_SLUG}.git"
+}
+
+resolve_github_auth() {
+    if [[ -n "${GITHUB_PAT:-}" ]]; then
+        return 0
+    fi
+    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+        return 0
+    fi
+    if [[ "${BOLD_REQUIRE_PAT:-}" == "1" ]]; then
+        echo ""
+        log_info "Private repository: set GITHUB_PAT or run 'gh auth login', or make the repo public."
+        prompt_with_validation "GitHub PAT" GITHUB_PAT '^gh[pousr]_[A-Za-z0-9_]+$' "" true
+    fi
+    return 0
 }
 
 git_clone_or_update() {
     local target="$1"
-    resolve_github_pat
+    resolve_github_auth
 
-    local clone_url="https://x-access-token:${GITHUB_PAT}@github.com/${REPO_SLUG}.git"
+    local clone_url
+    clone_url="$(get_git_clone_url)"
 
     if [[ -d "${target}/.git" ]]; then
         log_info "Updating repository in ${target}..."

@@ -157,7 +157,14 @@ bold-connection/
 
 ### One-command install
 
-Because this repository is **private**, authenticate before downloading the installer:
+**Public repository** (no token):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Recoba86/Bold-Connection/main/install.sh -o /tmp/bold-install.sh
+sudo bash /tmp/bold-install.sh
+```
+
+**Private repository** (PAT with `repo` scope):
 
 ```bash
 export GITHUB_PAT="ghp_your_token_here"
@@ -166,7 +173,6 @@ curl -fsSL \
   -H "Accept: application/vnd.github.raw" \
   "https://raw.githubusercontent.com/Recoba86/Bold-Connection/main/install.sh" \
   -o /tmp/bold-install.sh
-
 sudo bash /tmp/bold-install.sh
 ```
 
