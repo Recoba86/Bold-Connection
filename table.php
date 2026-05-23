@@ -1437,39 +1437,72 @@ try {
 
 
 
-$balancemain = json_decode(select("PaySetting", "ValuePay", "NamePay", "maxbalance", "select")['ValuePay'], true);
-if (!isset($balancemain['f'])) {
-    $value = json_encode(array(
-        "f" => "1000000",
-        "n" => "1000000",
-        "n2" => "1000000",
-    ));
-    $valuemain = json_encode(array(
-        "f" => "20000",
-        "n" => "20000",
-        "n2" => "20000",
-    ));
-    update("PaySetting", "ValuePay", $value, "NamePay", "maxbalance");
-    update("PaySetting", "ValuePay", $valuemain, "NamePay", "minbalance");
-}
-$pdo->query("ALTER TABLE `invoice` CHANGE `Volume` `Volume` VARCHAR(200)");
-$pdo->query("ALTER TABLE `invoice` CHANGE `price_product` `price_product` VARCHAR(200)");
-$pdo->query("ALTER TABLE `invoice` CHANGE `name_product` `name_product` VARCHAR(200)");
-$pdo->query("ALTER TABLE `invoice` CHANGE `username` `username` VARCHAR(200)");
-$pdo->query("ALTER TABLE `invoice` CHANGE `Service_location` `Service_location` VARCHAR(200)");
-$pdo->query("ALTER TABLE `invoice` CHANGE `time_sell` `time_sell` VARCHAR(200)");
-$pdo->query("ALTER TABLE marzban_panel MODIFY name_panel VARCHAR(255) COLLATE utf8mb4_bin");
-$pdo->query("ALTER TABLE product MODIFY name_product VARCHAR(1000) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin");
-$pdo->query("ALTER TABLE help MODIFY name_os VARCHAR(500) COLLATE utf8mb4_bin");
 try {
+    $payMax = select("PaySetting", "ValuePay", "NamePay", "maxbalance", "select");
+    $balancemain = is_array($payMax) && isset($payMax['ValuePay'])
+        ? json_decode($payMax['ValuePay'], true)
+        : null;
+    if (!is_array($balancemain) || !isset($balancemain['f'])) {
+        $value = json_encode(array(
+            "f" => "1000000",
+            "n" => "1000000",
+            "n2" => "1000000",
+        ));
+        $valuemain = json_encode(array(
+            "f" => "20000",
+            "n" => "20000",
+            "n2" => "20000",
+        ));
+        update("PaySetting", "ValuePay", $value, "NamePay", "maxbalance");
+        update("PaySetting", "ValuePay", $valuemain, "NamePay", "minbalance");
+    }
+
+    $alterTargets = [
+        'invoice' => [
+            "ALTER TABLE `invoice` CHANGE `Volume` `Volume` VARCHAR(200)",
+            "ALTER TABLE `invoice` CHANGE `price_product` `price_product` VARCHAR(200)",
+            "ALTER TABLE `invoice` CHANGE `name_product` `name_product` VARCHAR(200)",
+            "ALTER TABLE `invoice` CHANGE `username` `username` VARCHAR(200)",
+            "ALTER TABLE `invoice` CHANGE `Service_location` `Service_location` VARCHAR(200)",
+            "ALTER TABLE `invoice` CHANGE `time_sell` `time_sell` VARCHAR(200)",
+        ],
+        'marzban_panel' => [
+            "ALTER TABLE marzban_panel MODIFY name_panel VARCHAR(255) COLLATE utf8mb4_bin",
+        ],
+        'product' => [
+            "ALTER TABLE product MODIFY name_product VARCHAR(1000) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin",
+        ],
+        'help' => [
+            "ALTER TABLE help MODIFY name_os VARCHAR(500) COLLATE utf8mb4_bin",
+        ],
+    ];
+    foreach ($alterTargets as $table => $queries) {
+        $exists = $pdo->query("SHOW TABLES LIKE " . $pdo->quote($table));
+        if (!$exists || $exists->rowCount() === 0) {
+            continue;
+        }
+        foreach ($queries as $sql) {
+            $pdo->query($sql);
+        }
+    }
+
     $check = $pdo->query("SHOW COLUMNS FROM `user` LIKE 'ref_code'");
+    if ($check && $check->rowCount() != 0) {
+        $pdo->exec("ALTER TABLE `user` DROP `ref_code`");
+    }
 } catch (PDOException $e) {
-    error_log('table.php migration error: ' . $e->getMessage());
+    error_log('table.php final migration error: ' . $e->getMessage());
+} catch (Throwable $e) {
+    error_log('table.php final migration error: ' . $e->getMessage());
 }
 
-if (isset($check) && $check && $check->rowCount() != 0) {
-    $pdo->exec("ALTER TABLE `user` DROP `ref_code`");
+global $telegram_webhook_secret;
+$webhookParams = ['url' => "https://$domainhosts/index.php"];
+if (!empty($telegram_webhook_secret)) {
+    $webhookParams['secret_token'] = $telegram_webhook_secret;
 }
-telegram('setwebhook', [
-    'url' => "https://$domainhosts/index.php"
-]);
+telegram('setwebhook', $webhookParams);
+
+if (PHP_SAPI === 'cli') {
+    echo "table.php: database migrations completed.\n";
+}

@@ -465,9 +465,12 @@ register_telegram_webhook() {
 # ---------------------------------------------------------------------------
 run_table_php() {
     log_info "Running database migrations (table.php)..."
+    if [[ -f "${INSTALL_DIR}/table.php" ]]; then
+        (cd "${INSTALL_DIR}" && php table.php) && return 0
+    fi
     curl -sS -k --max-time 120 "https://${DOMAIN}/table.php" >/dev/null 2>&1 \
         || curl -sS --max-time 120 "http://${DOMAIN}/table.php" >/dev/null 2>&1 \
-        || log_warn "Could not reach table.php — run manually after SSL is ready."
+        || log_warn "table.php failed — run: cd ${INSTALL_DIR} && php table.php"
 }
 
 # ---------------------------------------------------------------------------
