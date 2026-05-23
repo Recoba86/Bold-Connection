@@ -19,6 +19,11 @@ if (!isset($admin_ids) || !is_array($admin_ids)) {
 if (!in_array($from_id, $admin_ids))
     return;
 
+$marzban_list = select('marzban_panel', 'name_panel', null, null, 'FETCH_COLUMN');
+if (!is_array($marzban_list)) {
+    $marzban_list = [];
+}
+
 $domainhostsEscaped = htmlspecialchars($domainhosts, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
 $miniAppInstructionText = <<<HTML
@@ -868,9 +873,25 @@ $paycount
     step('add_password_panel', $from_id);
     savedata("save", "username", $text);
 } elseif ($user['step'] == "add_password_panel") {
+    $userdata = json_decode($user['Processing_value'], true);
+    savedata("save", "password", $text);
+    if (isset($userdata['type']) && $userdata['type'] == "x-ui_single") {
+        sendmessage($from_id, "📌 API Token پنل 3x-ui را ارسال کنید.\n\nاگر API Token ندارید یا می‌خواهید با نام کاربری/رمز عبور وصل شوید، فقط - را ارسال کنید.", $backadmin, 'HTML');
+        step('add_xui_api_token', $from_id);
+        return;
+    }
+
     sendmessage($from_id, $textbotlang['Admin']['managepanel']['getlimitedpanel'], $backadmin, 'HTML');
     step('getlimitedpanel', $from_id);
-    savedata("save", "password", $text);
+} elseif ($user['step'] == "add_xui_api_token") {
+    $apiToken = trim($text);
+    if ($apiToken == '-' || strtolower($apiToken) == 'skip') {
+        $apiToken = '';
+    }
+
+    savedata("save", "api_token", $apiToken);
+    sendmessage($from_id, $textbotlang['Admin']['managepanel']['getlimitedpanel'], $backadmin, 'HTML');
+    step('getlimitedpanel', $from_id);
 } elseif ($user['step'] == "getlimitedpanel") {
     savedata("save", "limitpanel", $text);
     $userdata = json_decode($user['Processing_value'], true);
@@ -929,7 +950,8 @@ $paycount
     $statusextend = "on_extend";
     $subvip = "offsubvip";
     $stauts_on_holed = "1";
-    $stmt = $pdo->prepare("INSERT INTO marzban_panel (code_panel,name_panel,sublink,config,MethodUsername,TestAccount,status,limit_panel,namecustom,Methodextend,type,conecton,inboundid,agent,inbound_deactive,inboundstatus,url_panel,username_panel,password_panel,time_usertest,val_usertest,linksubx,priceextravolume,priceextratime,pricecustomvolume,pricecustomtime,mainvolume,maxvolume,maintime,maxtime,status_extend,subvip,changeloc,customvolume,on_hold_test,version_panel) VALUES (:code_panel,:name_panel,:sublink,:config,:MethodUsername,:TestAccount,:status,:limit_panel,:namecustom,:Methodextend,:type,:conecton,:inboundid,:agent,:inbound_deactive,:inboundstatus,:url_panel,:username_panel,:password_panel,:val_usertest,:time_usertest,:linksubx,:priceextravolume,:priceextratime,:pricecustomvolume,:pricecustomtime,:mainvolume,:maxvolume,:maintime,:maxtime,:status_extend,:subvip,:changeloc,:customvolume,:on_hold_test,'0')");
+    $apiToken = $userdata['api_token'] ?? null;
+    $stmt = $pdo->prepare("INSERT INTO marzban_panel (code_panel,name_panel,sublink,config,MethodUsername,TestAccount,status,limit_panel,namecustom,Methodextend,type,conecton,inboundid,agent,inbound_deactive,inboundstatus,url_panel,username_panel,password_panel,api_token,time_usertest,val_usertest,linksubx,priceextravolume,priceextratime,pricecustomvolume,pricecustomtime,mainvolume,maxvolume,maintime,maxtime,status_extend,subvip,changeloc,customvolume,on_hold_test,version_panel) VALUES (:code_panel,:name_panel,:sublink,:config,:MethodUsername,:TestAccount,:status,:limit_panel,:namecustom,:Methodextend,:type,:conecton,:inboundid,:agent,:inbound_deactive,:inboundstatus,:url_panel,:username_panel,:password_panel,:api_token,:val_usertest,:time_usertest,:linksubx,:priceextravolume,:priceextratime,:pricecustomvolume,:pricecustomtime,:mainvolume,:maxvolume,:maintime,:maxtime,:status_extend,:subvip,:changeloc,:customvolume,:on_hold_test,'0')");
     $stmt->bindParam(':code_panel', $randomString);
     $stmt->bindParam(':name_panel', $userdata['namepanel'], PDO::PARAM_STR);
     $stmt->bindParam(':sublink', $sublink);
@@ -950,6 +972,7 @@ $paycount
     $stmt->bindParam(':linksubx', $userdata['url_panel']);
     $stmt->bindParam(':username_panel', $userdata['username']);
     $stmt->bindParam(':password_panel', $userdata['password']);
+    $stmt->bindParam(':api_token', $apiToken);
     $stmt->bindParam(':val_usertest', $valume);
     $stmt->bindParam(':time_usertest', $time);
     $stmt->bindParam(':priceextravolume', $value);
@@ -3232,6 +3255,8 @@ $caption";
     sendmessage($from_id, $textbotlang['Admin']['Product']['Service_location'], $json_list_marzban_panel, 'HTML');
     step('get_location', $from_id);
 } elseif ($user['step'] == "get_location") {
+    $locationPanels = select('marzban_panel', 'name_panel', null, null, 'FETCH_COLUMN');
+    $marzban_list = is_array($locationPanels) ? $locationPanels : [];
     $marzban_list[] = '/all';
     if (!in_array($text, $marzban_list)) {
         sendmessage($from_id, "❌ پنل انتخابی اشتباه است", null, 'HTML');

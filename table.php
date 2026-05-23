@@ -249,6 +249,16 @@ try {
         addFieldToTable("setting", "Bot_Status", "botstatuson", "VARCHAR(200)");
         addFieldToTable("setting", "roll_Status", "rolleon", "VARCHAR(200)");
         addFieldToTable("setting", "verifystart", "offverify", "VARCHAR(200)");
+        $settingCount = (int) $pdo->query('SELECT COUNT(*) FROM setting')->fetchColumn();
+        if ($settingCount === 0) {
+            $stmt = $pdo->prepare("INSERT INTO setting (Bot_Status,roll_Status,get_number,limit_usertest_all,iran_number,NotUser,affiliatesstatus,affiliatespercentage,removedayc,showcard,statuscategory,numbercount,statusnewuser,statusagentrequest,volumewarn,inlinebtnmain,verifystart,statussupportpv,statusnamecustom,statuscategorygenral,agentreqprice,cronvolumere,bulkbuy,on_hold_day,verifybucodeuser,scorestatus,Lottery_prize,wheelـluck,wheelـluck_price,iplogin,daywarn,categoryhelp,linkappstatus,languageen,languageru,wheelagent,Lotteryagent,statusfirstwheel,statuslimitchangeloc,limitnumber,Debtsettlement,Dice,keyboardmain,statusnoteforf,statuscopycart,timeauto_not_verify,status_keyboard_config,cron_status) VALUES ('botstatuson','rolleon','offAuthenticationphone','1','offAuthenticationiran','offnotuser','offaffiliates','0','0','1','offcategory','0','onnewuser','onrequestagent','2','offinline','offverify','offpvsupport','offnamecustom','offcategorys','0','5','onbulk','4','offverify','0',:Lottery_prize,'0','0','0','2','0','0','0','0','1','1','0','0',:limitnumber,'1','0',:keyboardmain,'1','0','4','1',:cron_status)");
+            $stmt->execute([
+                ':Lottery_prize' => $DATAAWARD,
+                ':limitnumber' => $limitlist,
+                ':keyboardmain' => $keyboardmain,
+                ':cron_status' => $status_cron,
+            ]);
+        }
     }
 } catch (PDOException $e) {
     error_log('table.php migration error: ' . $e->getMessage());
@@ -319,6 +329,7 @@ try {
         url_panel varchar(2000) NULL,
         username_panel varchar(200) NULL,
         password_panel varchar(200) NULL,
+        api_token TEXT NULL,
         agent varchar(200) NULL,
         sublink varchar(500) NULL,
         config varchar(500) NULL,
@@ -402,6 +413,7 @@ try {
         addFieldToTable("marzban_panel", "maxtime", $valuemax_time, "VARCHAR(500)");
         addFieldToTable("marzban_panel", "MethodUsername", "آیدی عددی + حروف و عدد رندوم", "VARCHAR(100)");
         addFieldToTable("marzban_panel", "datelogin", null, "TEXT");
+        addFieldToTable("marzban_panel", "api_token", null, "TEXT");
         addFieldToTable("marzban_panel", "val_usertest", "100", "VARCHAR(50)");
         addFieldToTable("marzban_panel", "time_usertest", "1", "VARCHAR(50)");
         addFieldToTable("marzban_panel", "secret_code", null, "VARCHAR(200)");

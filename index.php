@@ -36,6 +36,9 @@ if (isset($chat_member))
     return;
 $first_name = sanitizeUserName($first_name);
 $setting = select("setting", "*");
+if (!is_array($setting)) {
+    $setting = [];
+}
 $ManagePanel = new ManagePanel();
 $keyboard_check = json_decode($setting['keyboardmain'], true);
 if (is_array($keyboard_check) && preg_match('/[\x{600}-\x{6FF}\x{FB50}-\x{FDFF}]/u', $keyboard_check['keyboard'][0][0]['text'])) {

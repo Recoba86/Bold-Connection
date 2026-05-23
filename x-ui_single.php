@@ -1,10 +1,18 @@
 <?php
 require_once 'config.php';
 require_once 'request.php';
+require_once 'x-ui_auth.php';
 ini_set('error_log', 'error_log');
+function xuiCookiePath($code_panel)
+{
+    $safeCode = preg_replace('/[^A-Za-z0-9_-]/', '_', (string) $code_panel);
+    return __DIR__ . '/cookie-' . $safeCode . '.txt';
+}
+
 function panel_login_cookie($code_panel)
 {
     $panel = select("marzban_panel", "*", "code_panel", $code_panel, "select");
+    $cookiePath = xuiCookiePath($code_panel);
     $curl = curl_init();
     curl_setopt_array($curl, array(
         CURLOPT_URL => $panel['url_panel'] . '/login',
@@ -16,28 +24,77 @@ function panel_login_cookie($code_panel)
         CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
         CURLOPT_CUSTOMREQUEST => 'POST',
         CURLOPT_POSTFIELDS => "username={$panel['username_panel']}&password=" . urlencode($panel['password_panel']),
-        CURLOPT_COOKIEJAR => 'cookie.txt',
+        CURLOPT_COOKIEJAR => $cookiePath,
     ));
     $response = curl_exec($curl);
     if (curl_error($curl)) {
+        $error = curl_error($curl);
+        curl_close($curl);
         return json_encode(array(
             'success' => false,
-            'msg' => curl_error($curl)
+            'msg' => $error
         ));
     }
+    curl_close($curl);
     return $response;
 }
+function xui_apply_auth(CurlRequest $req, array $panel)
+{
+    $apiToken = xuiPanelApiToken($panel);
+    if ($apiToken !== null) {
+        $req->setBearerToken($apiToken);
+        return false;
+    }
+
+    login($panel['code_panel']);
+    $req->setCookie(xuiCookiePath($panel['code_panel']));
+    return true;
+}
+
+function xui_cleanup_auth($usedCookie, array $panel)
+{
+    if (!$usedCookie) {
+        return;
+    }
+
+    $cookiePath = xuiCookiePath($panel['code_panel']);
+    if (is_file($cookiePath)) {
+        @unlink($cookiePath);
+    }
+}
+
 function login($code_panel, $verify = true)
 {
     $panel = select("marzban_panel", "*", "code_panel", $code_panel, "select");
+    if (xuiUsesBearerAuth($panel)) {
+        $url = $panel['url_panel'] . '/panel/api/inbounds/list';
+        $req = new CurlRequest($url);
+        $req->setHeaders(array(
+            'Accept: application/json',
+            'Content-Type: application/json',
+        ));
+        $req->setBearerToken(xuiPanelApiToken($panel));
+        $response = $req->get();
+        $decoded = isset($response['body']) ? json_decode($response['body'], true) : null;
+        if (is_array($decoded)) {
+            return $decoded;
+        }
+
+        return array(
+            'success' => isset($response['status']) && $response['status'] >= 200 && $response['status'] < 300,
+            'msg' => $response['error'] ?? ('HTTP ' . ($response['status'] ?? 'unknown')),
+        );
+    }
+
+    $cookiePath = xuiCookiePath($panel['code_panel']);
     if ($panel['datelogin'] != null && $verify) {
         $date = json_decode($panel['datelogin'], true);
         if (isset($date['time'])) {
             $timecurrent = time();
             $start_date = time() - strtotime($date['time']);
             if ($start_date <= 3000) {
-                file_put_contents('cookie.txt', $date['access_token']);
-                return;
+                file_put_contents($cookiePath, $date['access_token']);
+                return array('success' => true, 'msg' => 'Using cached session');
             }
         }
     }
@@ -45,7 +102,7 @@ function login($code_panel, $verify = true)
     $time = date('Y/m/d H:i:s');
     $data = json_encode(array(
         'time' => $time,
-        'access_token' => file_get_contents('cookie.txt')
+        'access_token' => is_file($cookiePath) ? file_get_contents($cookiePath) : ''
     ));
     update("marzban_panel", "datelogin", $data, 'name_panel', $panel['name_panel']);
     if (!is_string($response))
@@ -56,7 +113,6 @@ function login($code_panel, $verify = true)
 function get_clinets($username, $namepanel)
 {
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $namepanel, "select");
-    login($marzban_list_get['code_panel']);
     $url = $marzban_list_get['url_panel'] . "/panel/api/inbounds/getClientTraffics/$username";
     $headers = array(
         'Accept: application/json',
@@ -64,7 +120,7 @@ function get_clinets($username, $namepanel)
     );
     $req = new CurlRequest($url);
     $req->setHeaders($headers);
-    $req->setCookie('cookie.txt');
+    $usedCookie = xui_apply_auth($req, $marzban_list_get);
     $response = $req->get();
 
     if (isset($response['body'])) {
@@ -80,16 +136,13 @@ function get_clinets($username, $namepanel)
         error_log(json_encode($response));
     }
 
-    if (is_file('cookie.txt')) {
-        @unlink('cookie.txt');
-    }
+    xui_cleanup_auth($usedCookie, $marzban_list_get);
 
     return $response;
 }
 function addClient($namepanel, $usernameac, $Expire, $Total, $Uuid, $Flow, $subid, $inboundid, $name_product, $note = "")
 {
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $namepanel, "select");
-    login($marzban_list_get['code_panel']);
     if ($name_product == "usertest") {
         if ($marzban_list_get['on_hold_test'] == "1") {
             if ($Expire == 0) {
@@ -147,15 +200,14 @@ function addClient($namepanel, $usernameac, $Expire, $Total, $Uuid, $Flow, $subi
     );
     $req = new CurlRequest($url);
     $req->setHeaders($headers);
-    $req->setCookie('cookie.txt');
+    $usedCookie = xui_apply_auth($req, $marzban_list_get);
     $response = $req->post($configpanel);
-    unlink('cookie.txt');
+    xui_cleanup_auth($usedCookie, $marzban_list_get);
     return $response;
 }
 function updateClient($namepanel, $uuid, array $config)
 {
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $namepanel, "select");
-    login($marzban_list_get['code_panel']);
     $configpanel = json_encode($config, true);
     $url = $marzban_list_get['url_panel'] . '/panel/api/inbounds/updateClient/' . $uuid;
     $headers = array(
@@ -164,9 +216,9 @@ function updateClient($namepanel, $uuid, array $config)
     );
     $req = new CurlRequest($url);
     $req->setHeaders($headers);
-    $req->setCookie('cookie.txt');
+    $usedCookie = xui_apply_auth($req, $marzban_list_get);
     $response = $req->post($configpanel);
-    unlink('cookie.txt');
+    xui_cleanup_auth($usedCookie, $marzban_list_get);
     return $response;
 }
 function ResetUserDataUsagex_uisin($usernamepanel, $namepanel)
@@ -174,7 +226,6 @@ function ResetUserDataUsagex_uisin($usernamepanel, $namepanel)
     $data_user = get_clinets($usernamepanel, $namepanel);
     $data_user = json_decode($data_user['body'], true)['obj'];
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $namepanel, "select");
-    login($marzban_list_get['code_panel']);
     $url = $marzban_list_get['url_panel'] . "/panel/api/inbounds/{$data_user['inboundId']}/resetClientTraffic/" . $usernamepanel;
     $headers = array(
         'Accept: application/json',
@@ -182,15 +233,14 @@ function ResetUserDataUsagex_uisin($usernamepanel, $namepanel)
     );
     $req = new CurlRequest($url);
     $req->setHeaders($headers);
-    $req->setCookie('cookie.txt');
+    $usedCookie = xui_apply_auth($req, $marzban_list_get);
     $response = $req->post(array());
-    unlink('cookie.txt');
+    xui_cleanup_auth($usedCookie, $marzban_list_get);
     return $response;
 }
 function removeClient($location, $username)
 {
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $location, "select");
-    login($marzban_list_get['code_panel']);
     $url = $marzban_list_get['url_panel'] . "/panel/api/inbounds/{$marzban_list_get['inboundid']}/delClientByEmail/" . $username;
     $headers = array(
         'Accept: application/json',
@@ -198,8 +248,8 @@ function removeClient($location, $username)
     );
     $req = new CurlRequest($url);
     $req->setHeaders($headers);
-    $req->setCookie('cookie.txt');
+    $usedCookie = xui_apply_auth($req, $marzban_list_get);
     $response = $req->post(array());
-    unlink('cookie.txt');
+    xui_cleanup_auth($usedCookie, $marzban_list_get);
     return $response;
 }
