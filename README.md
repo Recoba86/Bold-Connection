@@ -1,144 +1,230 @@
-# 🤖 Bot Mirza Panel
+# Bold Connection
 
+**Bold Connection** is a production-grade Telegram bot platform for selling and managing VPN subscriptions. It connects Telegram users to industrial VPN panels (Marzban, 3x-ui, Alireza, Hiddify, and others), automates configuration provisioning, and supports multiple payment gateways with wallet, referral, and admin tooling.
 
-A Powerful Bot for Selling VPN Services with Auto Configuration Build.
-
-<p align="center">
-    <a href="https://t.me/mirzapanel" target="_blank">
-        <img src="https://img.shields.io/badge/Telegram-Group-blue?style=flat-square&logo=telegram" alt="Telegram Group"/>
-    </a>
-    <a href="https://github.com/mahdiMGF2/mirzabot" target="_blank">
-        <img src="https://img.shields.io/github/stars/mahdiMGF2/mirzabot?style=social" alt="GitHub Stars"/>
-    </a>
-    <a href="https://img.shields.io/github/forks/mahdiMGF2/mirzabot?style=flat-square" target="_blank">
-        <img src="https://img.shields.io/github/forks/mahdiMGF2/botmirzapanel?style=flat-square" alt="GitHub Forks"/>
-    </a>
-    <a href="https://github.com/mahdiMGF2/botmirzapanel/issues" target="_blank">
-        <img src="https://img.shields.io/github/issues/mahdiMGF2/mirzabot?style=flat-square" alt="GitHub Issues"/>
-    </a>
-</p>
-
+> This repository is the **Bold Connection** distribution of the Mirza Bot codebase (version **0.1.5**), with security hardening, professional documentation, and a one-click Linux installer.
 
 ---
 
-## 📚 Table of Contents
+## Table of Contents
 
-- [✨ Overview](#-overview)
-- [⚙️ Features](#️-features)
-- [🚀 Installation](#-installation)
-  - [Beta Installation](#️-beta-installation)
-  - [Updating the Bot](#-updating-bot)
-  - [Removing the Bot](#-removing)
-- [💵 Financial Support](#-financial-support)
-
----
-
-## ✨ Overview
-
-**Mirza Bot** is a feature-rich Telegram bot designed for selling VPN services for platforms like **Marzban**,**3x-ui panels**,**alireza panels**,**pasarguard**,**ibsng**,.... This bot simplifies the process of VPN subscription sales, enabling seamless automation, configuration building, and user management.
-
-Mirza Panel comes in two versions:  
-1. **Free Version** 🆓: Offers basic functionalities to get started with VPN sales.  
-2. **Subscription Version** 💎: Provides advanced features for businesses looking for more customization, detailed analytics, and enhanced management options.  
-
-Whether you’re offering trial accounts or managing large-scale VPN services, this bot covers everything you need to run a successful VPN business.
+- [Overview](#overview)
+- [Architecture at a Glance](#architecture-at-a-glance)
+- [Features](#features)
+- [Repository Layout](#repository-layout)
+- [Quick Start](#quick-start)
+- [Documentation](#documentation)
+- [Security](#security)
+- [Support & License](#support--license)
 
 ---
 
-## ⚙️ Features
+## Overview
 
-### 🔹 **Free Version Features**
+Bold Connection acts as the **commercial layer** between Telegram customers and your VPN infrastructure:
 
-- ✅ VPN Purchase with Auto Configuration Creation
-- ✅ View Purchased Services
-- ✅ Trial Accounts for Users
-- ✅ User Support Section
-- ✅ Verification via Phone Number
-- ✅ Payments via:
-  - Card-to-Card
-  - **NowPayments Gateway**
-  - **aqayepardakht Gateway**
-- ✅ Fully Automated Configuration Creation
-- ✅ Compatibility with All Protocols
-- ✅ Mandatory Channel Membership for Purchases
-- ✅ Detailed Purchase and Trial Account Reports
-- ✅ Tutorial Section with Admin-Customizable Content
-- ✅ Balance Management via Admin Panel
-- ✅ Multiple Admin Support
-- ✅ Manage Purchased Services:
-  - Renewals
-  - Additional Volume Purchases
-  - Configuration Retrieval
-  - Updating Service Links
-- ✅ FAQ Section
-- ✅ Text Customization from the Bot
-- ✅ Product and Panel Management
-- ✅ Admin-Specified Username Generation Methods
-- ✅ Configuration Settings Based on Protocols
-- ✅ Gateway Management
+| Layer | Role |
+|-------|------|
+| **Telegram** | User interface — purchases, support, account management |
+| **Bold Connection (this project)** | Business logic, payments, database, cron jobs, admin API |
+| **VPN panels** | Actual proxy/VPN user provisioning (Marzban, 3x-ui, …) |
+| **Payment gateways** | Zarinpal, card-to-card, crypto, and other providers |
+
+Typical flow:
+
+1. User sends `/start` in Telegram.
+2. Telegram POSTs the update to `index.php` (webhook).
+3. User selects a product and pays via a configured gateway.
+4. On payment confirmation, the bot calls the panel API and delivers the subscription link.
+5. Panel events (expiry, usage) can POST back to `webhooks.php`.
 
 ---
 
-### 🔹 **Subscription Version Features**
+## Architecture at a Glance
 
-In addition to the features of the Free Version.
-To read the details, please refer to the link below.
+```mermaid
+flowchart TB
+  subgraph telegram [Telegram]
+    User[User]
+    BotAPI[Bot API]
+  end
 
-📌 **Subscription Purchase Guide**: [View Guide](https://t.me/mirzaperimium/4)
+  subgraph bold [Bold Connection Server]
+    Index[index.php]
+    Webhooks[webhooks.php]
+    Function[function.php]
+    DB[(MySQL)]
+    Cron[cronbot/]
+    API[api/]
+    Payment[payment/]
+  end
+
+  subgraph external [External Systems]
+    Panel[VPN Panel API]
+    Gateway[Payment Gateways]
+  end
+
+  User --> BotAPI
+  BotAPI -->|webhook POST| Index
+  Index --> Function
+  Function --> DB
+  Index --> Payment
+  Payment --> Gateway
+  Function --> Panel
+  Panel -->|events| Webhooks
+  Cron --> Function
+  API --> Function
+```
+
+**Entry points**
+
+| File | Purpose |
+|------|---------|
+| [`index.php`](index.php) | Main Telegram webhook handler |
+| [`webhooks.php`](webhooks.php) | Panel notification webhook |
+| [`payment/*.php`](payment/) | Payment gateway callbacks |
+| [`api/*.php`](api/) | REST-style admin/integration API |
+| [`cronbot/*.php`](cronbot/) | Scheduled background tasks |
+| [`table.php`](table.php) | Database schema bootstrap & migrations |
+
+**Core libraries**
+
+| File | Purpose |
+|------|---------|
+| [`config.php`](config.php) | Environment configuration (not in git — copy from [`config.example.php`](config.example.php)) |
+| [`function.php`](function.php) | Shared helpers, payment atomics, cron registration |
+| [`panels.php`](panels.php) | Multi-panel abstraction (`ManagePanel` class) |
+| [`botapi.php`](botapi.php) | Telegram Bot API wrapper |
 
 ---
 
-## 🚀 Installation
+## Features
+
+### Customer-facing
+
+- VPN purchase with automatic config creation
+- Trial accounts, renewals, volume top-ups
+- Wallet balance, referrals, discounts
+- Mandatory channel membership
+- Multi-language text customization
+- Mini App storefront (`api/miniapp.php`)
+
+### Admin & operations
+
+- Multi-admin support
+- Product, category, and panel management
+- Payment gateway configuration
+- Broadcast messaging and reports
+- REST API under `/api/` with token auth
+- Automated cron jobs (expiry, notifications, backups)
+
+### Supported integrations
+
+- **Panels:** Marzban, Marzneshin, 3x-ui, Alireza, Hiddify, S-UI, and more via [`panels.php`](panels.php)
+- **Payments:** Zarinpal, Aqayepardakht, IranPay, Tronado, NowPayments, Plisio, card-to-card, Telegram Stars
+
+---
+
+## Repository Layout
+
+```
+bold-connection/
+├── index.php              # Telegram webhook
+├── webhooks.php           # Panel webhook
+├── config.example.php     # Configuration template
+├── function.php           # Core helpers
+├── panels.php             # Panel drivers
+├── table.php              # DB migrations
+├── install.sh             # One-click Linux installer
+├── api/                   # HTTP API modules
+├── payment/               # Gateway callbacks
+├── cronbot/               # Cron endpoints
+├── docs/                  # Full documentation
+└── vendor/                # PHP dependencies (committed)
+```
+
+---
+
+## Quick Start
 
 ### Prerequisites
 
-Ensure you have the following before installation:
-- 🖥️ **Ubuntu Server 22**
-- 🌐 **A Domain Name**
+- Ubuntu 20.04+ / 22.04 / 24.04 or Debian 11/12
+- Root access
+- A domain pointing to the server (A record)
+- A Telegram bot token from [@BotFather](https://t.me/BotFather)
+- GitHub Personal Access Token with `repo` scope (private repository)
 
-### 🔧 Installing the Bot (Stable Version)
+### One-command install
 
-Run the following command in your server terminal:
+Because this repository is **private**, authenticate before downloading the installer:
 
 ```bash
-curl -o install.sh -L https://raw.githubusercontent.com/mahdiMGF2/mirzabot/main/install.sh && bash install.sh
+export GITHUB_PAT="ghp_your_token_here"
+curl -fsSL \
+  -H "Authorization: token ${GITHUB_PAT}" \
+  -H "Accept: application/vnd.github.raw" \
+  "https://raw.githubusercontent.com/Recoba86/Bold-Connection/main/install.sh" \
+  -o /tmp/bold-install.sh
+
+sudo bash /tmp/bold-install.sh
 ```
 
-When prompted, **select option 1** to complete the installation.
+The installer is **fully interactive** — it prompts for domain, bot token, admin chat ID, database credentials, and security secrets, then produces a production-ready deployment.
 
+See [docs/installer.md](docs/installer.md) for menu options (install / update / repair / remove).
+
+### Manual install (summary)
+
+1. Copy [`config.example.php`](config.example.php) → `config.php` and fill values.
+2. Create MySQL database and import schema via `https://your-domain/table.php`.
+3. Register Telegram webhook:
+
+   ```bash
+   curl -s "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+     -d "url=https://your-domain/index.php" \
+     -d "secret_token=<telegram_webhook_secret>"
+   ```
+
+4. Configure cron jobs (see [docs/deployment.md](docs/deployment.md)).
 
 ---
 
-## 🔄 updating bot
+## Documentation
 
-To update your bot to the latest version, use the following command:
-
-```bash
-curl -o install.sh -L https://raw.githubusercontent.com/mahdiMGF2/botmirzapanel/main/install.sh && bash install.sh
-```
-When prompted, **select option update** to remove the bot.
----
-
-## ❌ removing
-
-If you want to completely remove the bot from your server, run the following command:
-
-```bash
-curl -o install.sh -L https://raw.githubusercontent.com/mahdiMGF2/botmirzapanel/main/install.sh && bash install.sh
-```
-
-When prompted, **select option 3** to remove the bot.
+| Document | Description |
+|----------|-------------|
+| [docs/architecture.md](docs/architecture.md) | System design, data flows, component map |
+| [docs/deployment.md](docs/deployment.md) | Production deployment guide |
+| [docs/configuration.md](docs/configuration.md) | All configuration variables |
+| [docs/environment.md](docs/environment.md) | Server requirements & PHP extensions |
+| [docs/api.md](docs/api.md) | REST API reference |
+| [docs/modules.md](docs/modules.md) | Payment, panel, cron, and mini-app modules |
+| [docs/security.md](docs/security.md) | Security model and hardening checklist |
+| [docs/installer.md](docs/installer.md) | Installer reference & troubleshooting |
+| [docs/راهنمای-نصب-تلگرام-و-پنل.md](docs/راهنمای-نصب-تلگرام-و-پنل.md) | Persian Telegram + panel setup guide |
 
 ---
 
-## 💵 Financial Support
+## Security
 
-If you find **Mirza Panel** helpful and would like to support its development, you can make a financial contribution via cryptocurrency.
+Bold Connection 0.1.5 includes:
 
-<a href = "https://nowpayments.io/donation/permiumbotmirza">👉 Support the Project on NowPayments</a>
+- PDO-only database access with prepared statements
+- Atomic payment confirmation (`confirmPaymentAtomically`)
+- Optional Telegram webhook secret token validation
+- Decoupled payment/panel webhook secret (`$payment_webhook_key`)
+- TLS verification for outbound HTTP (configurable for dev only)
+- IDOR guards on invoice/service ownership checks
 
-Your support ensures continued updates and improvements for this project. Thank you! 🙌
+**Before production:** set `$telegram_webhook_secret` and `$payment_webhook_key` in `config.php`. See [docs/security.md](docs/security.md).
 
-### Contributors
+---
 
-![Contributors](https://contrib.rocks/image?repo=mahdiMGF2/mirzabot)
+## Support & License
+
+- **Version:** 0.1.5 (see [`version`](version))
+- **Distribution:** Bold Connection (private repository under Recoba86)
+- **Upstream lineage:** Mirza Bot / Mirza Panel ecosystem
+
+For deployment help, start with [docs/deployment.md](docs/deployment.md) and [docs/installer.md](docs/installer.md).
