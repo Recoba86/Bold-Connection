@@ -12,6 +12,10 @@ $text_panel_admin_login_template = "💎 | Version Bot: $version
 
 <blockquote>🐞 | اگر در عملکرد ربات با باگ یا مشکلی مواجه شدید، از طریق دکمهٔ **📬 گزارش ربات** در پنل ادمین با ما در ارتباط باشید.</blockquote>";
 
+if (!isset($admin_ids) || !is_array($admin_ids)) {
+    $admin_ids = getAdminIds();
+}
+
 if (!in_array($from_id, $admin_ids))
     return;
 
