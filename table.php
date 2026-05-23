@@ -1207,7 +1207,7 @@ try {
             $pdo->query("ALTER TABLE card_number MODIFY cardnumber varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci PRIMARY KEY");
             $pdo->query("ALTER TABLE card_number MODIFY namecard varchar(1000) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL");
         }
-        $columnInfo->free();
+        $columnInfo->closeCursor();
     }
 } catch (PDOException $e) {
     error_log('table.php migration error: ' . $e->getMessage());
