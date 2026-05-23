@@ -61,27 +61,54 @@ if (!is_array($data)) {
 }
 
 $data = sanitize_recursive($data);
-$tokencheck = explode('Bearer ', $headers['Authorization'])[1];
+
+// Auth hardening (Phase-2 Item #7): the previous flow assumed an
+// `Authorization` key existed and split on "Bearer " unconditionally, which
+// (a) produced a PHP warning + null offset when the header was missing or
+// lower-cased and (b) compared the token with the loose `!=` operator that
+// would coerce "0e..." style strings to numeric equality. We now:
+//   1. Locate the header case-insensitively (getallheaders can return either
+//      "Authorization" or "authorization" depending on SAPI).
+//   2. Require an exact "Bearer " prefix via strncmp.
+//   3. Use hash_equals against the DB-stored token (timing-attack safe and
+//      type-strict; no juggling).
+$authHeader = '';
+if (is_array($headers)) {
+    foreach ($headers as $name => $value) {
+        if (strcasecmp((string) $name, 'Authorization') === 0) {
+            $authHeader = (string) $value;
+            break;
+        }
+    }
+}
+if (strncmp($authHeader, 'Bearer ', 7) !== 0) {
+    http_response_code(401);
+    echo json_encode(['status' => false, 'msg' => 'Unauthorized']);
+    return;
+}
+$tokencheck = substr($authHeader, 7);
+
 $usercheck = select('user', "*", "id", $data['user_id'], "select");
+if (!is_array($usercheck) || !isset($usercheck['token']) || !is_string($usercheck['token']) || $usercheck['token'] === '' || !hash_equals($usercheck['token'], $tokencheck)) {
+    http_response_code(403);
+    echo json_encode([
+        'status' => false,
+        'msg' => "Token invalid",
+    ]);
+    return;
+}
 if ($usercheck['User_Status'] == "block") {
+    http_response_code(402);
     echo json_encode([
         'status' => false,
         'msg' => "user blocked",
     ]);
-    http_response_code(402);
     return;
 }
 $errorreport = select("topicid", "idreport", "report", "errorreport", "select")['idreport'];
 $porsantreport = select("topicid", "idreport", "report", "porsantreport", "select")['idreport'];
 $buyreport = select("topicid", "idreport", "report", "buyreport", "select")['idreport'];
-if (!$usercheck || $usercheck['token'] != $tokencheck) {
-    echo json_encode([
-        'status' => false,
-        'msg' => "Token invalid",
-    ]);
-    http_response_code(403);
-    return;
-}
+
 switch ($data['actions']) {
     case 'invoices':
         if ($method !== "GET") {

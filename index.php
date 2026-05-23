@@ -47,12 +47,22 @@ if (is_array($keyboard_check) && preg_match('/[\x{600}-\x{6FF}\x{FB50}-\x{FDFF}]
 if (!checktelegramip())
     die("Unauthorized access");
 #-----------end telegram_ip_ranges------------#
+
+global $telegram_webhook_secret;
+if (!empty($telegram_webhook_secret)) {
+    $incomingTelegramSecret = $_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN'] ?? '';
+    if (!is_string($incomingTelegramSecret) || !hash_equals((string) $telegram_webhook_secret, $incomingTelegramSecret)) {
+        http_response_code(403);
+        die('Forbidden');
+    }
+}
+
+try {
 if (intval($from_id) == 0)
     return;
 #-------------Variable----------#
-$users_ids = select("user", "id", null, null, "FETCH_COLUMN");
 $otherreport = select("topicid", "idreport", "report", "otherreport", "select")['idreport'];
-if (!in_array($from_id, $users_ids) && $setting['statusnewuser'] == "onnewuser") {
+if (!recordExists('user', 'id', $from_id) && $setting['statusnewuser'] == "onnewuser") {
     $Response = json_encode([
         'inline_keyboard' => [
             [
@@ -114,20 +124,7 @@ if ($user == false) {
         'limitchangeloc' => ''
     );
 }
-$admin_ids = select("admin", "id_admin", null, null, "FETCH_COLUMN");
-if (!is_array($admin_ids)) {
-    $admin_ids = [];
-}
 $helpdata = select("help", "*");
-$id_invoice = select("invoice", "id_invoice", null, null, "FETCH_COLUMN");
-$usernameinvoice = select("invoice", "username", null, null, "FETCH_COLUMN");
-$code_Discount = select("Discount", "code", null, null, "FETCH_COLUMN");
-$marzban_list = select("marzban_panel", "name_panel", null, null, "FETCH_COLUMN");
-$name_product = select("product", "name_product", null, null, "FETCH_COLUMN");
-$SellDiscount = select("DiscountSell", "codeDiscount", null, null, "FETCH_COLUMN");
-$channels_id = select("channels", "link", null, null, "FETCH_COLUMN");
-$pricepayment = select("Payment_report", "price", null, null, "FETCH_COLUMN");
-$listcard = select("card_number", "cardnumber", null, null, "FETCH_COLUMN");
 $topic_id = select("topicid", "*", null, null, "fetchAll");
 $datatextbot = $pdo->query("SELECT id_text, text FROM textbot")->fetchAll(PDO::FETCH_KEY_PAIR);
 $statusnote = false;
@@ -176,7 +173,7 @@ if ($user['register'] == "none") {
 if (!in_array($user['agent'], ["n", "n2", "f"]))
     update("user", "agent", "f", "id", $from_id);
 #-----------User_Status------------#
-if ($user['User_Status'] == "block" && !in_array($from_id, $admin_ids)) {
+if ($user['User_Status'] == "block" && !isAdmin($from_id)) {
     $textblock = sprintf($textbotlang['users']['block']['descriptions'], $user['description_blocking']);
     sendmessage($from_id, $textblock, null, 'html');
     return;
@@ -188,7 +185,7 @@ if (floor($TimeLastMessage / 60) >= 1) {
     update("user", "last_message_time", $timebot, "id", $from_id);
     update("user", "message_count", "1", "id", $from_id);
 } else {
-    if (!in_array($from_id, $admin_ids)) {
+    if (!isAdmin($from_id)) {
         $addmessage = intval($user['message_count']) + 1;
         update("user", "message_count", $addmessage, "id", $from_id);
         if ($user['message_count'] >= "35") {
@@ -227,18 +224,34 @@ if (strpos($text, "/start ") !== false && $user['step'] != "gettextSystemMessage
             sendmessage($from_id, $textbotlang['users']['affiliates']['offaffiliates'], $keyboard, 'HTML');
             return;
         }
-        if (is_numeric($affiliatesid) && in_array($affiliatesid, $users_ids)) {
-            if ($affiliatesid == $from_id) {
+        if (is_numeric($affiliatesid) && recordExists('user', 'id', $affiliatesid)) {
+            if ((string) $affiliatesid === (string) $from_id) {
                 sendmessage($from_id, $textbotlang['users']['affiliates']['invalidaffiliates'], null, 'html');
                 return;
             }
+            // Phase-2 fix: previously the referrer column was written *before*
+            // the "already referred" guard ran. That let a user re-`/start <id>`
+            // and overwrite their referrer (and credit a new gift) every time.
+            // Now we (a) check current state, then (b) use an atomic
+            // conditional UPDATE so concurrent /start invocations cannot race.
             $user = select("user", "*", "id", $from_id, "select");
-            update("user", "affiliates", $affiliatesid, "id", $from_id);
-            if (intval($user['affiliates']) != 0) {
+            if (intval($user['affiliates']) !== 0) {
                 sendmessage($from_id, $textbotlang['users']['affiliates']['affiliateedago'], null, 'html');
                 return;
             }
+            $stmtRef = $pdo->prepare(
+                "UPDATE user SET affiliates = :ref WHERE id = :uid AND (affiliates IS NULL OR affiliates = '0' OR affiliates = 0)"
+            );
+            $stmtRef->execute([':ref' => $affiliatesid, ':uid' => $from_id]);
+            if ($stmtRef->rowCount() === 0) {
+                // Lost the race or already referred - bail out without crediting again.
+                clearSelectCache('user');
+                sendmessage($from_id, $textbotlang['users']['affiliates']['affiliateedago'], null, 'html');
+                return;
+            }
+            clearSelectCache('user');
             $useraffiliates = select("user", "*", 'id', $affiliatesid, "select");
+
             sendmessage($from_id, "<b>🎉 خوش آمدی!</b>
 
 شما با دعوت <b>@{$useraffiliates['username']}</b> وارد ربات شدی و به عنوان زیرمجموعه ثبت شدی ✅
@@ -276,7 +289,7 @@ if (strpos($text, "/start ") !== false && $user['step'] != "gettextSystemMessage
         $text = $affiliatesid;
     }
 }
-if (intval($user['verify']) == 0 && !in_array($from_id, $admin_ids) && $setting['verifystart'] == "onverify") {
+if (intval($user['verify']) == 0 && !isAdmin($from_id) && $setting['verifystart'] == "onverify") {
     $textverify = "⚠️ حساب شما احراز هویت نشده است پیام  شما  به ادمین ارسال شده  
     در صورت پیگیری  سریع تر می توانید به آیدی زیر پیام دهید
     @{$setting['id_support']}";
@@ -286,7 +299,7 @@ if (intval($user['verify']) == 0 && !in_array($from_id, $admin_ids) && $setting[
 ;
 
 #-----------roll------------#
-if ($setting['roll_Status'] == "rolleon" && $user['roll_Status'] == 0 && ($text != "✅ قوانین را می پذیرم" and $datain != "acceptrule") && !in_array($from_id, $admin_ids)) {
+if ($setting['roll_Status'] == "rolleon" && $user['roll_Status'] == 0 && ($text != "✅ قوانین را می پذیرم" and $datain != "acceptrule") && !isAdmin($from_id)) {
     sendmessage($from_id, $datatextbot['text_roll'], $confrimrolls, 'html');
     return;
 }
@@ -298,12 +311,16 @@ if ($text == "✅ قوانین را می پذیرم" or $datain == "acceptrule")
 }
 
 #-----------Bot_Status------------#
-if ($setting['Bot_Status'] == "botstatusoff" && !in_array($from_id, $admin_ids)) {
+if ($setting['Bot_Status'] == "botstatusoff" && !isAdmin($from_id)) {
     sendmessage($from_id, $datatextbot['text_bot_off'], null, 'html');
     return;
 }
 #-----------/start------------#
 if ($user['joinchannel'] != "active") {
+    $channels_id = select("channels", "link", null, null, "FETCH_COLUMN");
+    if (!is_array($channels_id)) {
+        $channels_id = [];
+    }
     if (count($channels_id) != 0) {
         $channels = channel($channels_id);
         if ($datain == "confirmchannel") {
@@ -346,7 +363,7 @@ if ($user['joinchannel'] != "active") {
             $partsaffiliates = explode("_", $user['Processing_value_four']);
             if ($partsaffiliates[0] == "affiliates") {
                 $affiliatesid = $partsaffiliates[1];
-                if (!in_array($affiliatesid, $users_ids)) {
+                if (!recordExists('user', 'id', $affiliatesid)) {
                     sendmessage($from_id, $textbotlang['users']['affiliates']['affiliatesidyou'], null, 'html');
                     return;
                 }
@@ -371,7 +388,7 @@ if ($user['joinchannel'] != "active") {
             }
             return;
         }
-        if (count($channels) != 0 && !in_array($from_id, $admin_ids)) {
+        if (count($channels) != 0 && !isAdmin($from_id)) {
             $keyboardchannel = [
                 'inline_keyboard' => [],
             ];
@@ -1177,18 +1194,17 @@ $textconnect
     step('home', $from_id);
     return;
 } elseif (preg_match('/subscriptionurl_(\w+)/', $datain, $dataget) || strpos($text, "/sub ") !== false) {
+    // IDOR fix: every path must verify $nameloc['id_user'] === $from_id.
     if (!empty($text) && $text[0] == "/") {
         $id_invoice = explode(' ', $text)[1];
-        $nameloc = select("invoice", "*", "username", $id_invoice, "select");
-        if ($nameloc['id_user'] != $from_id) {
-            $nameloc = false;
-        }
+        $nameloc = loadOwnedInvoiceByUsername($id_invoice, $from_id);
     } else {
         $id_invoice = $dataget[1];
-        $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+        $nameloc = loadOwnedInvoice($id_invoice, $from_id);
     }
-    if ($nameloc == false)
+    if (!is_array($nameloc))
         return;
+
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
     $Check_token = token_panel($marzban_list_get['url_panel'], $marzban_list_get['username_panel'], $marzban_list_get['password_panel']);
     $DataUserOut = $ManagePanel->DataUser($nameloc['Service_location'], $nameloc['username']);
@@ -1248,9 +1264,15 @@ $textconnect
     }
 } elseif (preg_match('/removeauto-(\w+)/', $datain, $dataget)) {
     $id_invoice = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    // IDOR fix: refuse to delete invoices that do not belong to the caller.
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id);
+    if (!is_array($nameloc)) {
+        sendmessage($from_id, $textbotlang['users']['stateus']['UserNotFound'], null, 'html');
+        return;
+    }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
     $ManagePanel->RemoveUser($nameloc['Service_location'], $nameloc['username']);
+
     update('invoice', 'status', 'removebyuser', 'id_invoice', $id_invoice);
     $tetremove = "ادمین عزیز یک کاربر سرویس خود را پس از پایان حجم یا زمان حدف کرده است
 نام کاربری کانفیک : {$nameloc['username']}";
@@ -1264,17 +1286,16 @@ $textconnect
     }
     sendmessage($from_id, "📌 سرویس با موفقیت حذف شد", null, 'html');
 } elseif (preg_match('/config_(\w+)/', $datain, $dataget) || strpos($text, "/link ") !== false) {
+    // IDOR fix: both branches now enforce ownership via loadOwnedInvoice* helpers.
     if (!empty($text) && $text[0] == "/") {
         $id_invoice = explode(' ', $text)[1];
-        $nameloc = select("invoice", "*", "username", $id_invoice, "select");
-        if ($nameloc['id_user'] != $from_id) {
-            $nameloc = false;
-        }
+        $nameloc = loadOwnedInvoiceByUsername($id_invoice, $from_id);
     } else {
         $id_invoice = $dataget[1];
-        $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+        $nameloc = loadOwnedInvoice($id_invoice, $from_id);
     }
-    if ($nameloc == false) {
+    if (!is_array($nameloc)) {
+
         sendmessage($from_id, $textbotlang['users']['stateus']['UserNotFound'], null, 'html');
         return;
     }
@@ -1290,11 +1311,13 @@ $textconnect
     Editmessagetext($from_id, $message_id, "📌 از لیست زیر یک کانفیگ را انتخاب استفاده نمایید.", keyboard_config($DataUserOut['links'], $nameloc['id_invoice']));
 } elseif (preg_match('/configget_(.*)_(.*)/', $datain, $dataget)) {
     $id_invoice = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
-    if ($nameloc == false) {
+    // IDOR fix.
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id);
+    if (!is_array($nameloc)) {
         sendmessage($from_id, $textbotlang['users']['stateus']['UserNotFound'], null, 'html');
         return;
     }
+
     $DataUserOut = $ManagePanel->DataUser($nameloc['Service_location'], $nameloc['username']);
     $bakinfos = json_encode([
         'inline_keyboard' => [
@@ -1344,8 +1367,14 @@ $textconnect
         return;
     }
     $id_invoice = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    // IDOR fix.
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id);
+    if (!is_array($nameloc)) {
+        sendmessage($from_id, $textbotlang['users']['stateus']['UserNotFound'], null, 'html');
+        return;
+    }
     if ($nameloc['Status'] == "disablebyadmin") {
+
         sendmessage($from_id, "❌ این قابلیت درحال حاضر در دسترس نیست", null, 'html');
         return;
     }
@@ -1387,7 +1416,7 @@ $textconnect
     }
 } elseif (preg_match('/confirmaccountdisable_(\w+)/', $datain, $dataget)) {
     $id_invoice = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
     $bakinfos = json_encode([
         'inline_keyboard' => [
@@ -1409,7 +1438,7 @@ $textconnect
     }
 } elseif (preg_match('/extend_(\w+)/', $datain, $dataget)) {
     $id_invoice = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     if ($nameloc == false) {
         sendmessage($from_id, "❌ تمدید با خطا مواجه گردید مراحل تمدید را مجددا انجام دهید.", null, 'HTML');
         return;
@@ -1500,7 +1529,7 @@ $textconnect
     }
 } elseif ($user['step'] == "gettimecustomvolomforextend") {
     $userdate = json_decode($user['Processing_value'], true);
-    $nameloc = select("invoice", "*", "id_invoice", $userdate['id_invoice'], "select");
+    $nameloc = loadOwnedInvoice($userdate["id_invoice"], $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
     $mainvolume = json_decode($marzban_list_get['mainvolume'], true);
     $mainvolume = $mainvolume[$user['agent']];
@@ -1530,7 +1559,7 @@ $textconnect
 } elseif (preg_match('/productextendmonths_(\w+)/', $datain, $dataget)) {
     $monthenumber = $dataget[1];
     $userdate = json_decode($user['Processing_value'], true);
-    $nameloc = select("invoice", "*", "id_invoice", $userdate['id_invoice'], "select");
+    $nameloc = loadOwnedInvoice($userdate["id_invoice"], $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     $stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = :service_location OR Location = '/all') AND agent = :agent AND Service_time = :monthe AND one_buy_status = '0'");
     $stmt->execute([
         ':service_location' => $nameloc['Service_location'],
@@ -1568,7 +1597,7 @@ $textconnect
     Editmessagetext($from_id, $message_id, $textbotlang['users']['extend']['selectservice'], $json_list_product_lists);
 } elseif (preg_match('/^serviceextendselect_(.*)/', $datain, $dataget) || $user['step'] == "getvolumecustomuserforextend" || $datain == "exntedagei") {
     $userdate = json_decode($user['Processing_value'], true);
-    $nameloc = select("invoice", "*", "id_invoice", $userdate['id_invoice'], "select");
+    $nameloc = loadOwnedInvoice($userdate["id_invoice"], $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
     if ($user['step'] == "getvolumecustomuserforextend") {
         if (!ctype_digit($text)) {
@@ -1675,9 +1704,9 @@ $textconnect
     deletemessage($from_id, $message_id);
 } elseif ($user['step'] == "getcodesellDiscountextend") {
     $userdate = json_decode($user['Processing_value'], true);
-    $nameloc = select("invoice", "*", "id_invoice", $userdate['id_invoice'], "select");
+    $nameloc = loadOwnedInvoice($userdate["id_invoice"], $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
-    if (!in_array($text, $SellDiscount)) {
+    if (!recordExists('DiscountSell', 'codeDiscount', $text)) {
         sendmessage($from_id, $textbotlang['users']['Discount']['notcode'], $backuser, 'HTML');
         return;
     }
@@ -1769,7 +1798,7 @@ $textconnect
     $partsdic = explode("_", $user['Processing_value_four']);
     $userdata = json_decode($user['Processing_value'], true);
     $id_invoice = $userdata['id_invoice'];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     if ($nameloc == false) {
         sendmessage($from_id, "❌ تمدید با خطا مواجه گردید مراحل تمدید را مجددا انجام دهید.", null, 'HTML');
         return;
@@ -1953,7 +1982,7 @@ $textconnect
         ':status' => $status,
     ]);
     update("invoice", "Status", "active", "id_invoice", $id_invoice);
-    if (intval($setting['scorestatus']) == 1 and !in_array($from_id, $admin_ids)) {
+    if (intval($setting['scorestatus']) == 1 and !isAdmin($from_id)) {
         sendmessage($from_id, "📌شما 2 امتیاز جدید کسب کردید.", null, 'html');
         $scorenew = $user['score'] + 2;
         update("user", "score", $scorenew, "id", $from_id);
@@ -2011,7 +2040,7 @@ $textconnect
     }
 } elseif (preg_match('/changelink_(\w+)/', $datain, $dataget)) {
     $id_invoice = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
     $DataUserOut = $ManagePanel->DataUser($nameloc['Service_location'], $nameloc['username']);
     if ($DataUserOut['status'] == "Unsuccessful") {
@@ -2035,7 +2064,7 @@ $textconnect
     Editmessagetext($from_id, $message_id, $textbotlang['users']['changelink']['warnchange'], $keyboardextend);
 } elseif (preg_match('/confirmchange_(\w+)/', $datain, $dataget)) {
     $id_invoice = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
     $DataUserOut = $ManagePanel->Revoke_sub($nameloc['Service_location'], $nameloc['username']);
     if ($DataUserOut['status'] == "Unsuccessful") {
@@ -2078,7 +2107,7 @@ $textconnect
     }
 } elseif (preg_match('/Extra_volume_(\w+)/', $datain, $dataget)) {
     $id_invoice = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
     if ($marzban_list_get['status_extend'] == "off_extend") {
         sendmessage($from_id, "❌ امکان خرید حجم اضافه در این پنل وجود ندارد", null, 'html');
@@ -2114,7 +2143,7 @@ $textconnect
         sendmessage($from_id, $textbotlang['users']['Extra_volume']['invalidprice'], $backuser, 'HTML');
         return;
     }
-    $nameloc = select("invoice", "*", "id_invoice", $user['Processing_value'], "select");
+    $nameloc = loadOwnedInvoice($user["Processing_value"], $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
     $eextraprice = json_decode($marzban_list_get['priceextravolume'], true);
     $extrapricevalue = $eextraprice[$user['agent']];
@@ -2139,7 +2168,7 @@ $textconnect
     step('home', $from_id);
 } elseif (preg_match('/confirmaextra-(\w+)/', $datain, $dataget)) {
     $volume = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $user['Processing_value'], "select");
+    $nameloc = loadOwnedInvoice($user["Processing_value"], $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     if (!in_array($nameloc['Status'], ['active', 'end_of_time', 'end_of_volume', 'sendedwarn', 'send_on_hold'])) {
         sendmessage($from_id, "❌ خرید با خطا مواجه گردید مراحل را مجدد انجام  دهید.", null, 'HTML');
         return;
@@ -2239,7 +2268,7 @@ $textconnect
             ]
         ]
     ]);
-    if (intval($setting['scorestatus']) == 1 and !in_array($from_id, $admin_ids)) {
+    if (intval($setting['scorestatus']) == 1 and !isAdmin($from_id)) {
         sendmessage($from_id, "📌شما 1 امتیاز جدید کسب کردید.", null, 'html');
         $scorenew = $user['score'] + 1;
         update("user", "score", $scorenew, "id", $from_id);
@@ -2277,7 +2306,7 @@ $textconnect
         sendmessage($from_id, "❌ محدودیت تغییر لوکیشن شما به پایان رسیده  است", null, 'html');
         return;
     }
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     update("user", "Processing_value", $nameloc['id_invoice'], "id", $from_id);
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
     if ($marzban_list_get['changeloc'] == "offchangeloc") {
@@ -2316,7 +2345,7 @@ $textconnect
     Editmessagetext($from_id, $message_id, $textchange, $keyboardextend);
 } elseif (preg_match('/confirmchangeloccha_(\w+)/', $datain, $dataget)) {
     $id_invoice = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
     $marzban_list_get_new = select("marzban_panel", "*", "code_panel", $user['Processing_value_one'], "select");
     $limitchangeloc = json_decode($setting['limitnumber'], true);
@@ -2534,7 +2563,7 @@ $textconnect
 } elseif (preg_match('/disorder-(\w+)/', $datain, $dataget)) {
     $id_invoice = $dataget[1];
     update("user", "Processing_value", $id_invoice, "id", $from_id);
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     $DataUserOut = $ManagePanel->DataUser($nameloc['Service_location'], $nameloc['username']);
     if ($DataUserOut['status'] == "Unsuccessful") {
         sendmessage($from_id, $textbotlang['users']['stateus']['error'], null, 'html');
@@ -2554,7 +2583,7 @@ $textconnect
     step("getdesdisorder", $from_id);
 } elseif ($user['step'] == "getdesdisorder") {
     update("user", "Processing_value", $text, "id", $from_id);
-    $nameloc = select("invoice", "*", "id_invoice", $user['Processing_value'], "select");
+    $nameloc = loadOwnedInvoice($user["Processing_value"], $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     $DataUserOut = $ManagePanel->DataUser($nameloc['Service_location'], $nameloc['username']);
     if ($DataUserOut['status'] == "Unsuccessful") {
         sendmessage($from_id, $textbotlang['users']['stateus']['error'], null, 'html');
@@ -2577,7 +2606,7 @@ $textconnect
     step("home", $from_id);
 } elseif (preg_match('/confirmdisorders-(\w+)/', $datain, $dataget)) {
     $id_invoice = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     $Response = json_encode([
         'inline_keyboard' => [
             [
@@ -2661,7 +2690,7 @@ $textconnect
 📶 اخرین زمان اتصال  : $lastonline
 🔄 اخرین زمان آپدیت لینک اشتراک  : $lastupdate
 #️⃣ کلاینت متصل شده :<code>{$DataUserOut['sub_last_user_agent']}</code>";
-    foreach ($admin_ids as $admin) {
+    foreach (getAdminIds() as $admin) {
         $adminrulecheck = select("admin", "*", "id_admin", $admin, "select");
         if ($adminrulecheck['rule'] == "Seller")
             continue;
@@ -2677,7 +2706,7 @@ $textconnect
     Editmessagetext($from_id, $message_id, "✅ با تشکر از ثبت درخواست ،درخواست شما  ارسال شده و درحال بررسی توسط پشتیبانی می باشد.", $bakinfos, 'html');
 } elseif (preg_match('/Extra_time_(\w+)/', $datain, $dataget)) {
     $id_invoice = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
     if ($marzban_list_get['status_extend'] == "off_extend") {
         sendmessage($from_id, "❌ امکان خرید زمان اضافه در این پنل وجود ندارد", null, 'html');
@@ -2713,7 +2742,7 @@ $textconnect
         sendmessage($from_id, $textbotlang['Admin']['Product']['Invalidtime'], $backuser, 'HTML');
         return;
     }
-    $nameloc = select("invoice", "*", "id_invoice", $user['Processing_value'], "select");
+    $nameloc = loadOwnedInvoice($user["Processing_value"], $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
     $eextraprice = json_decode($marzban_list_get['priceextratime'], true);
     $extratimepricevalue = $eextraprice[$user['agent']];
@@ -2741,7 +2770,7 @@ $textconnect
 } elseif (preg_match('/confirmaextratime-(\w+)/', $datain, $dataget)) {
     $tmieextra = $dataget[1];
     $pricelasttime = $tmieextra;
-    $nameloc = select("invoice", "*", "id_invoice", $user['Processing_value'], "select");
+    $nameloc = loadOwnedInvoice($user["Processing_value"], $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     if (!in_array($nameloc['Status'], ['active', 'end_of_time', 'end_of_volume', 'sendedwarn', 'send_on_hold'])) {
         sendmessage($from_id, "❌ خرید با خطا مواجه گردید مراحل را مجدد انجام  دهید.", null, 'HTML');
         return;
@@ -2846,7 +2875,7 @@ $textconnect
             ]
         ]
     ]);
-    if (intval($setting['scorestatus']) == 1 and !in_array($from_id, $admin_ids)) {
+    if (intval($setting['scorestatus']) == 1 and !isAdmin($from_id)) {
         sendmessage($from_id, "📌شما 1 امتیاز جدید کسب کردید.", null, 'html');
         $scorenew = $user['score'] + 1;
         update("user", "score", $scorenew, "id", $from_id);
@@ -2877,7 +2906,7 @@ $textconnect
     }
 } elseif (preg_match('/removeserviceuser_(\w+)/', $datain, $dataget)) {
     $id_invoice = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     savedata("clear", "id_invoice", $id_invoice);
     $bakinfos = json_encode([
         'inline_keyboard' => [
@@ -2892,7 +2921,7 @@ $textconnect
     $userdata = json_decode($user['Processing_value'], true);
     $id_invoice = $userdata['id_invoice'];
     savedata("save", "descritionsremove", $text);
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     if ($nameloc['name_product'] == "سرویس تست") {
         sendmessage($from_id, $textbotlang['users']['stateus']['errorusertest'], null, 'html');
         return;
@@ -2930,7 +2959,7 @@ $textconnect
         return;
     }
     $id_invoice = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
     $stmt = $pdo->prepare("INSERT IGNORE INTO cancel_service (id_user, username, description, status) VALUES (:id_user, :username, :description, :status)");
     $descriptions = "0";
@@ -3022,7 +3051,7 @@ $textconnect
             ],
         ]
     ]);
-    foreach ($admin_ids as $admin) {
+    foreach (getAdminIds() as $admin) {
         sendmessage($admin, $textinfoadmin, $confirmremoveadmin, 'html');
         step("home", $admin);
     }
@@ -3030,7 +3059,7 @@ $textconnect
     sendmessage($from_id, $textbotlang['users']['stateus']['sendrequestsremove'], $keyboard, 'html');
 } elseif (preg_match('/transfer_(\w+)/', $datain, $dataget)) {
     $id_invoice = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     if ($nameloc['name_product'] == "سرویس تست") {
         sendmessage($from_id, $textbotlang['Admin']['transfor']['transfornotvalid'], null, 'html');
         return;
@@ -3053,7 +3082,7 @@ $textconnect
     update("user", "Processing_value_one", $nameloc['username'], "id", $from_id);
     update("user", "Processing_value_tow", $nameloc['id_invoice'], "id", $from_id);
 } elseif ($user['step'] == "getidfortransfer") {
-    if (!in_array($text, $users_ids)) {
+    if (!recordExists('user', 'id', $text)) {
         sendmessage($from_id, $textbotlang['Admin']['transfor']['notusertrns'], $backuser, 'HTML');
         return;
     }
@@ -3073,7 +3102,7 @@ $textconnect
         return;
     }
     $id_invoice = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $nameloc = loadOwnedInvoice($id_invoice, $from_id); if (!is_array($nameloc)) { sendmessage($from_id, $textbotlang["users"]["stateus"]["UserNotFound"], null, "html"); return; }
     update("invoice", "id_user", $user['Processing_value_one'], "id_invoice", $id_invoice);
     $bakinfos = json_encode([
         'inline_keyboard' => [
@@ -3115,7 +3144,7 @@ $textconnect
         }
         if ($user['number'] == "none" && $setting['get_number'] == "onAuthenticationphone")
             return;
-        if ($user['limit_usertest'] <= 0 && !in_array($from_id, $admin_ids)) {
+        if ($user['limit_usertest'] <= 0 && !isAdmin($from_id)) {
             sendmessage($from_id, $textbotlang['users']['usertest']['limitwarning'], $keyboard_buy, 'html');
             return;
         }
@@ -3128,7 +3157,7 @@ if ($user['step'] == "createusertest" || preg_match('/locationtest_(.*)/', $data
         return;
     }
     $userlimit = select("user", "*", "id", $from_id, "select");
-    if ($userlimit['limit_usertest'] <= 0 && !in_array($from_id, $admin_ids)) {
+    if ($userlimit['limit_usertest'] <= 0 && !isAdmin($from_id)) {
         sendmessage($from_id, $textbotlang['users']['usertest']['limitwarning'], $keyboard_buy, 'html');
         return;
     }
@@ -3202,7 +3231,7 @@ if ($user['step'] == "createusertest" || preg_match('/locationtest_(.*)/', $data
     $username_ac = strtolower($username_ac);
     $DataUserOut = $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_ac);
     $random_number = rand(1000000, 9999999);
-    if (isset($DataUserOut['username']) || in_array($username_ac, $usernameinvoice)) {
+    if (isset($DataUserOut['username']) || recordExists('invoice', 'username', $username_ac)) {
         $username_ac = $random_number . "_" . $username_ac;
     }
     $datac = array(
@@ -4089,7 +4118,7 @@ $textinvite
     $username_ac = strtolower($username_ac);
     $DataUserOut = $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_ac);
     $random_number = rand(1000000, 9999999);
-    if (isset($DataUserOut['username']) || in_array($username_ac, $usernameinvoice)) {
+    if (isset($DataUserOut['username']) || recordExists('invoice', 'username', $username_ac)) {
         $username_ac = $random_number . "_" . $username_ac;
     }
     if (isset($username_ac))
@@ -4165,14 +4194,14 @@ $textinvite
     }
     $username_ac = strtolower($user['Processing_value_tow']);
     $DataUserOut = $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_ac);
-    if (isset($DataUserOut['username']) || in_array($username_ac, $usernameinvoice)) {
+    if (isset($DataUserOut['username']) || recordExists('invoice', 'username', $username_ac)) {
         sendmessage($from_id, "❌ لطفا مراحل خرید را مجددا انجام دهید", null, 'HTML');
         return;
     }
     $date = time();
     $randomString = bin2hex(random_bytes(4));
     $random_number = rand(1000000, 9999999);
-    if (in_array($randomString, $id_invoice)) {
+    if (recordExists('invoice', 'id_invoice', $randomString)) {
         $randomString = $random_number . $randomString;
     }
     if ($marzban_list_get['type'] == "Manualsale") {
@@ -4374,7 +4403,7 @@ $textinvite
                 $result = ($priceproduct * $setting['affiliatespercentage']) / 100;
                 $user_Balance = select("user", "*", "id", $user['affiliates'], "select");
                 $Balance_prim = $user_Balance['Balance'] + $result;
-                if (intval($setting['scorestatus']) == 1 and !in_array($user['affiliates'], $admin_ids)) {
+                if (intval($setting['scorestatus']) == 1 and !isAdmin($user['affiliates'])) {
                     sendmessage($user['affiliates'], "📌شما 2 امتیاز جدید کسب کردید.", null, 'html');
                     $scorenew = $user_Balance['score'] + 2;
                     update("user", "score", $scorenew, "id", $user['affiliates']);
@@ -4403,7 +4432,7 @@ $textinvite
             $result = ($priceproduct * $setting['affiliatespercentage']) / 100;
             $user_Balance = select("user", "*", "id", $user['affiliates'], "select");
             $Balance_prim = $user_Balance['Balance'] + $result;
-            if (intval($setting['scorestatus']) == 1 and !in_array($user['affiliates'], $admin_ids)) {
+            if (intval($setting['scorestatus']) == 1 and !isAdmin($user['affiliates'])) {
                 sendmessage($user['affiliates'], "📌شما 2 امتیاز جدید کسب کردید.", null, 'html');
                 $scorenew = $user_Balance['score'] + 2;
                 update("user", "score", $scorenew, "id", $user['affiliates']);
@@ -4428,7 +4457,7 @@ $textinvite
             sendmessage($user['affiliates'], $textadd, null, 'HTML');
         }
     }
-    if (intval($setting['scorestatus']) == 1 and !in_array($from_id, $admin_ids)) {
+    if (intval($setting['scorestatus']) == 1 and !isAdmin($from_id)) {
         sendmessage($from_id, "📌شما 1 امتیاز جدید کسب کردید.", null, 'html');
         $scorenew = $user['score'] + 1;
         update("user", "score", $scorenew, "id", $from_id);
@@ -4494,7 +4523,7 @@ $textonebuy
     $stmt->execute();
     $info_product = $stmt->fetch(PDO::FETCH_ASSOC);
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $userdate['name_panel'], "select");
-    if (!in_array($text, $SellDiscount)) {
+    if (!recordExists('DiscountSell', 'codeDiscount', $text)) {
         sendmessage($from_id, $textbotlang['users']['Discount']['notcode'], $backuser, 'HTML');
         return;
     }
@@ -4892,11 +4921,11 @@ $textonebuy
         $random_number = rand(1000000, 9999999);
         $username_acc = $username_ac . "_" . $i;
         $get_username_Check = $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_acc);
-        if (isset($get_username_Check['username']) || in_array($username_acc, $usernameinvoice)) {
+        if (isset($get_username_Check['username']) || recordExists('invoice', 'username', $username_acc)) {
             $username_acc = $random_number . "_" . $username_acc;
         }
         $randomString = bin2hex(random_bytes(4));
-        if (in_array($randomString, $id_invoice)) {
+        if (recordExists('invoice', 'id_invoice', $randomString)) {
             $randomString = $random_number . $randomString;
         }
         $dataoutput = $ManagePanel->createUser($marzban_list_get['name_panel'], $info_product['code_product'], $username_acc, $datac);
@@ -5030,27 +5059,40 @@ $textonebuy
     update("user", 'Processing_value', $message_id, "id", $from_id);
 } elseif ($user['step'] == "getprice") {
     deletemessage($from_id, $user['Processing_value']);
-    if (!is_numeric($text))
-        return sendmessage($from_id, $textbotlang['users']['Balance']['errorprice'], null, 'HTML');
+    // Type-juggling hardening (Wallet Top-Up Item #5):
+    // The legacy `is_numeric($text)` accepted scientific notation, leading +/-,
+    // whitespace and hex literals on some builds. Worse, raw $text was then
+    // compared against int bounds with `>` / `<` and persisted back into
+    // Processing_value as a string that downstream code coerced freely.
+    // We now demand a strict, in-range integer via filter_var BEFORE anything
+    // is loaded or compared, and replace $text with the typed int.
     $minbalance = json_decode(select("PaySetting", "*", "NamePay", "minbalance", "select")['ValuePay'], true)[$user['agent']];
     $maxbalance = json_decode(select("PaySetting", "*", "NamePay", "maxbalance", "select")['ValuePay'], true)[$user['agent']];
-    $balancelast = $text;
-    if ($text > $maxbalance or $text < $minbalance) {
-        $minbalance = number_format($minbalance);
-        $maxbalance = number_format($maxbalance);
-        sendmessage($from_id, "❌ خطا 
-💬 مبلغ باید حداقل $minbalance تومان و حداکثر $maxbalance تومان باشد", null, 'HTML');
+    $amountInt = filter_var($text, FILTER_VALIDATE_INT, [
+        'options' => [
+            'min_range' => (int) $minbalance,
+            'max_range' => (int) $maxbalance,
+        ],
+    ]);
+    if ($amountInt === false) {
+        $minbalanceFmt = number_format((int) $minbalance);
+        $maxbalanceFmt = number_format((int) $maxbalance);
+        sendmessage($from_id, "❌ مبلغ نامعتبر است
+💬 مبلغ باید عددی صحیح بین $minbalanceFmt تا $maxbalanceFmt تومان باشد", null, 'HTML');
         return;
     }
+    $text = $amountInt;
+    $balancelast = $amountInt;
     if ($user['Balance'] < 0 and intval($setting['Debtsettlement']) == 1) {
-        $balancruser = abs($user['Balance']);
-        if ($text < $balancruser) {
+        $balancruser = abs((int) $user['Balance']);
+        if ($amountInt < $balancruser) {
             sendmessage($from_id, "❌ شما بدهی دارید، باید حداقل $balancruser تومان پرداخت کنید.
          میبغ خود را مجددا ارسال نمایید", null, 'HTML');
             return;
         }
     }
     update("user", "Processing_value", $balancelast, "id", $from_id);
+
     sendmessage($from_id, $textbotlang['users']['Balance']['selectPatment'], $step_payment, 'HTML');
     step('get_step_payment', $from_id);
 } elseif ($user['step'] == "get_step_payment") {
@@ -5092,7 +5134,7 @@ $textonebuy
         if ($PaySetting == "onautoconfirm") {
             $random_number = rand(0, 2000);
             $user['Processing_value'] = intval($user['Processing_value']) + $random_number;
-            if (in_array($user['Processing_value'], $pricepayment)) {
+            if (unpaidPaymentAmountExists((int) $user['Processing_value'])) {
                 $random_number = rand(0, 2000);
                 $user['Processing_value'] = intval($user['Processing_value']) + $random_number;
             }
@@ -6033,36 +6075,36 @@ if (preg_match('/Confirmpay_user_(\w+)_(\w+)/', $datain, $dataget)) {
             'show_alert' => true,
             'cache_time' => 5,
         ));
-        update("Payment_report", "payment_Status", "paid", "id_order", $Payment_report['id_order']);
-        DirectPayment($Payment_report['id_order']);
-        $stmt = $pdo->prepare("SELECT * FROM user WHERE id = :id LIMIT 1");
-        $stmt->bindValue(':id', $Payment_report['id_user'], PDO::PARAM_STR);
-        $stmt->execute();
-        $Balance_id = $stmt->fetch(PDO::FETCH_ASSOC);
-        $Payment_report['price'] = number_format($Payment_report['price'], 0);
-        $text_report = "💵 پرداخت جدید
+        $confirmation = confirmPaymentAtomically($Payment_report['id_order'], [
+            'provider' => 'iranpay2',
+            'payment_id' => $id_payment,
+        ]);
+        if (!empty($confirmation['confirmed']) && is_array($confirmation['payment_report'] ?? null)) {
+            $Payment_report = $confirmation['payment_report'];
+            $Balance_id = select("user", "*", "id", $Payment_report['id_user'], "select");
+            $priceFormatted = number_format((float) $Payment_report['price'], 0);
+            $text_report = "💵 پرداخت جدید
                 
 آیدی عددی کاربر : $from_id
-مبلغ تراکنش : {$Payment_report['price']} 
+مبلغ تراکنش : {$priceFormatted} 
 روش پرداخت : درگاه ارزی ریالی اول";
-        $pricecashback = select("PaySetting", "ValuePay", "NamePay", "chashbackiranpay2", "select")['ValuePay'];
-        if ($pricecashback != "0") {
-            $result = ($Payment_report['price'] * $pricecashback) / 100;
-            $Balance_confrim = intval($Balance_id['Balance']) + $result;
-            update("user", "Balance", $Balance_confrim, "id", $user['id']);
-            $pricecashback = number_format($pricecashback);
-            $text_report = sprintf($textbotlang['users']['Discount']['gift-deposit'], $result);
-            sendmessage($from_id, $text_report, null, 'HTML');
+            $pricecashback = select("PaySetting", "ValuePay", "NamePay", "chashbackiranpay2", "select")['ValuePay'];
+            if ($pricecashback != "0" && is_array($Balance_id)) {
+                $result = ((float) $Payment_report['price']) * ((float) $pricecashback) / 100;
+                $Balance_confrim = intval($Balance_id['Balance']) + $result;
+                update("user", "Balance", $Balance_confrim, "id", $Balance_id['id']);
+                $text_report_user = sprintf($textbotlang['users']['Discount']['gift-deposit'], $result);
+                sendmessage($Balance_id['id'], $text_report_user, null, 'HTML');
+            }
+            if (strlen($setting['Channel_Report']) > 0) {
+                telegram('sendmessage', [
+                    'chat_id' => $setting['Channel_Report'],
+                    'message_thread_id' => $paymentreports,
+                    'text' => $text_report,
+                    'parse_mode' => "HTML"
+                ]);
+            }
         }
-        if (strlen($setting['Channel_Report']) > 0) {
-            telegram('sendmessage', [
-                'chat_id' => $setting['Channel_Report'],
-                'message_thread_id' => $paymentreports,
-                'text' => $text_report,
-                'parse_mode' => "HTML"
-            ]);
-        }
-        update("Payment_report", "payment_Status", "paid", "id_order", $Payment_report['id_order']);
         update("user", "Processing_value_one", "none", "id", $Payment_report['id_order']);
         update("user", "Processing_value_tow", "none", "id", $Payment_report['id_order']);
         update("user", "Processing_value_four", "none", "id", $Payment_report['id_order']);
@@ -6110,7 +6152,7 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
     $stmt = $pdo->prepare($sql);
     $stmt->execute();
     $paymentcount = $stmt->rowCount();
-    if ($paymentcount != 0 and !in_array($from_id, $admin_ids)) {
+    if ($paymentcount != 0 and !isAdmin($from_id)) {
         sendmessage($from_id, "❗ شما در ۲ دقیقه اخیر رسید ارسال کرده اید لطفا ۲ دقیقه دیگر رسید جدید را ارسال نمایید.", null, 'HTML');
         return;
     }
@@ -6318,7 +6360,7 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
 توضیحات: $caption $text
 ✍️ در صورت درست بودن رسید پرداخت را تایید نمایید.";
     }
-    foreach ($admin_ids as $id_admin) {
+    foreach (getAdminIds() as $id_admin) {
         $adminrulecheck = select("admin", "*", "id_admin", $id_admin, "select");
         if ($adminrulecheck['rule'] == "support")
             continue;
@@ -6515,7 +6557,7 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
 ✍️ در صورت درست بودن رسید پرداخت را تایید نمایید.";
         sendmessage($from_id, $textbotlang['users']['Balance']['Send-receipt'], $keyboard, 'HTML');
     }
-    foreach ($admin_ids as $id_admin) {
+    foreach (getAdminIds() as $id_admin) {
         $adminrulecheck = select("admin", "*", "id_admin", $id_admin, "select");
         if ($adminrulecheck['rule'] == "support")
             continue;
@@ -6541,7 +6583,7 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
     Editmessagetext($from_id, $message_id, $textbotlang['users']['Discount']['getcode'], $bakinfos);
     step('get_code_user', $from_id);
 } elseif ($user['step'] == "get_code_user") {
-    if (!in_array($text, $code_Discount)) {
+    if (!recordExists('Discount', 'code', $text)) {
         sendmessage($from_id, $textbotlang['users']['Discount']['notcode'], null, 'HTML');
         return;
     }
@@ -6664,7 +6706,7 @@ $text_porsant
         sendmessage($from_id, "📛 این بخش درحال حاضر غیرفعال می باشد", $keyboard, 'HTML');
         return;
     }
-    if (!in_array($user['affiliates'], $users_ids)) {
+    if (!recordExists('user', 'id', $user['affiliates'])) {
         sendmessage($from_id, "📛 شما زیرمجموعه هیچ کاربری نیستید.", $keyboard, 'HTML');
         return;
     }
@@ -6863,7 +6905,7 @@ $text_porsant
             ],
         ]
     ]);
-    foreach ($admin_ids as $id_admin) {
+    foreach (getAdminIds() as $id_admin) {
         $adminrulecheck = select("admin", "*", "id_admin", $id_admin, "select");
         if ($adminrulecheck['rule'] == "Seller")
             continue;
@@ -6994,7 +7036,7 @@ $text_porsant
             ],
         ]
     ]);
-    foreach ($admin_ids as $admin) {
+    foreach (getAdminIds() as $admin) {
         sendmessage($admin, $textrequestagent, $keyboardmanage, 'HTML');
     }
 } elseif ($text == "/privacy") {
@@ -7378,25 +7420,30 @@ if (isset($update['message']['successful_payment'])) {
         return;
     }
     update("Payment_report", "dec_not_confirmed", $Payment_report['dec_not_confirmed'] . json_encode($update['message']['successful_payment']), "id_order", $Payment_report['id_order']);
-    DirectPayment($Payment_report['id_order']);
-    $pricecashback = select("PaySetting", "ValuePay", "NamePay", "chashbackstar", "select")['ValuePay'];
-    $Balance_id = select("user", "*", "id", $Payment_report['id_user'], "select");
-    if ($pricecashback != "0") {
-        $result = ($Payment_report['price'] * $pricecashback) / 100;
-        $Balance_confrim = intval($Balance_id['Balance']) + $result;
-        update("user", "Balance", $Balance_confrim, "id", $Balance_id['id']);
-        $text_report = sprintf($textbotlang['users']['Discount']['gift-deposit'], $result);
-        sendmessage($Balance_id['id'], $text_report, null, 'HTML');
+    $confirmation = confirmPaymentAtomically($Payment_report['id_order'], [
+        'provider' => 'telegram_stars',
+        'payload' => $update['message']['successful_payment'],
+    ]);
+    if (!empty($confirmation['confirmed']) && is_array($confirmation['payment_report'] ?? null)) {
+        $Payment_report = $confirmation['payment_report'];
+        $pricecashback = select("PaySetting", "ValuePay", "NamePay", "chashbackstar", "select")['ValuePay'];
+        $Balance_id = select("user", "*", "id", $Payment_report['id_user'], "select");
+        if ($pricecashback != "0" && is_array($Balance_id)) {
+            $result = ($Payment_report['price'] * $pricecashback) / 100;
+            $Balance_confrim = intval($Balance_id['Balance']) + $result;
+            update("user", "Balance", $Balance_confrim, "id", $Balance_id['id']);
+            $text_report = sprintf($textbotlang['users']['Discount']['gift-deposit'], $result);
+            sendmessage($Balance_id['id'], $text_report, null, 'HTML');
+        }
+        if (strlen($setting['Channel_Report']) > 0 && is_array($Balance_id)) {
+            telegram('sendmessage', [
+                'chat_id' => $setting['Channel_Report'],
+                'message_thread_id' => $paymentreports,
+                'text' => sprintf($textbotlang['Admin']['reportgroup']['new-payment-star'], $Balance_id['username'], $Balance_id['id'], $Payment_report['price'], $update['message']['successful_payment']['total_amount'] ?? 0),
+                'parse_mode' => "HTML"
+            ]);
+        }
     }
-    if (strlen($setting['Channel_Report']) > 0) {
-        telegram('sendmessage', [
-            'chat_id' => $setting['Channel_Report'],
-            'message_thread_id' => $paymentreports,
-            'text' => sprintf($textbotlang['Admin']['reportgroup']['new-payment-star'], $Balance_id['username'], $Balance_id['id'], $Payment_report['price'], $update['pre_checkout_query']['total_amount']),
-            'parse_mode' => "HTML"
-        ]);
-    }
-    update("Payment_report", "payment_Status", "paid", "id_order", $Payment_report['id_order']);
 } elseif (preg_match('/extends_(\w+)_(.*)/', $datain, $dataget)) {
     $username = $dataget[1];
     $location = select("marzban_panel", "*", "code_panel", $user['Processing_value_four'], "select");
@@ -7562,7 +7609,14 @@ if (isset($update['message']['successful_payment'])) {
         ]);
     }
 }
-if (in_array($from_id, $admin_ids))
+if (isAdmin($from_id))
     require_once 'admin.php';
+
+} catch (Throwable $e) {
+    error_log('index.php uncaught: ' . $e->getMessage());
+    if (!headers_sent()) {
+        http_response_code(200);
+    }
+}
 
 $pdo = null;

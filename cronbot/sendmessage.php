@@ -123,12 +123,16 @@ for ($i = 0; $i < 20; $i++) {
         if ($meesage['ok'] == false and $meesage['description'] == "Forbidden: bot was blocked by the user") {
             $invoicecount = select("invoice", "*", "id_user", $iduser->id, "count");
             $userinfo = select("user", "Balance", "id", $iduser->id, "select");
-            if ($invoicecount == 0 and $userinfo['Balance'] == 0) {
-                $Id_user = $iduser->id;
-                $stmt = $pdo->prepare("DELETE FROM user WHERE id = '$Id_user'");
-                $stmt->execute();
+            if ($invoicecount == 0 and (is_array($userinfo) && $userinfo['Balance'] == 0)) {
+                // Use a bound parameter instead of inlining $iduser->id - the
+                // value originates from a JSON file maintained by the admin
+                // and must not be trusted as safe SQL input.
+                $stmt = $pdo->prepare('DELETE FROM user WHERE id = ?');
+                $stmt->execute([$iduser->id]);
+                clearSelectCache('user');
             }
         }
+
 
         if ($meesage['ok'] and $info['pingmessage'] == "yes") {
             pinmessage($iduser->id, $meesage['result']['message_id']);

@@ -48,13 +48,17 @@ class CurlRequest {
     }
 
     private function execute($method, $data = null) {
+        global $allow_self_signed_certs;
+
         $this->timeout = !$this->timeout  ?  10000 : $this->timeout;
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $this->url);
         curl_setopt($ch, CURLOPT_CUSTOMREQUEST, strtoupper($method));
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_TIMEOUT_MS, $this->timeout);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        $allowSelfSigned = !empty($allow_self_signed_certs);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, !$allowSelfSigned);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, $allowSelfSigned ? 0 : 2);
 
         $finalHeaders = $this->prepareHeaders();
         if (!empty($finalHeaders)) {

@@ -1,1 +1,14 @@
 .aider*
+api/cache_keyboard.json
+config.php
+cronbot/users.json
+cronbot/info
+*.log
+error_log
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+.env
+.env.*

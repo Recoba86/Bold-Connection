@@ -1,8 +1,63 @@
 <?php
 require_once 'vendor/autoload.php';
-require 'config.php';
-require 'vendor/autoload.php';
+require_once 'config.php';
 ini_set('error_log', 'error_log');
+
+/**
+ * Whitelist identifiers (table / column names) that we splice into raw SQL.
+ *
+ * Several generic helpers in this file (select(), update(), addFieldToTable(),
+ * ensureColumnExistsForUpdate()) accept a table or field name as a string and
+ * concatenate it into the query. Bound parameters cannot be used for
+ * identifiers, so we must defend in depth by rejecting anything that is not a
+ * plain `[A-Za-z0-9_]+` identifier. This closes the latent SQL injection
+ * surface if any of these helpers is ever invoked with user-controlled input.
+ */
+function isSafeSqlIdentifier($identifier): bool
+{
+    return is_string($identifier)
+        && $identifier !== ''
+        && preg_match('/^[A-Za-z0-9_]+$/', $identifier) === 1;
+}
+
+function safeSqlIdentifier($identifier, string $label = 'identifier'): string
+{
+    if (!isSafeSqlIdentifier($identifier)) {
+        $rendered = is_scalar($identifier) ? (string) $identifier : gettype($identifier);
+        throw new InvalidArgumentException("Invalid SQL {$label}: " . $rendered);
+    }
+
+    return '`' . $identifier . '`';
+}
+
+/**
+ * Backwards compatible variant for fragments that include `*`, `COUNT(*)`,
+ * `SUM(col) AS alias`, etc. We allow a small grammar that is still anchored
+ * to known SQL constructs, otherwise the value must look like a plain
+ * identifier.
+ */
+function safeSqlFieldList($field): string
+{
+    if (!is_string($field) || $field === '') {
+        throw new InvalidArgumentException('Invalid SQL field list');
+    }
+
+    $trimmed = trim($field);
+
+    if ($trimmed === '*') {
+        return '*';
+    }
+
+    // Allow a permissive but strictly-validated grammar used by legacy
+    // callers: identifiers, commas, dots, asterisks, parentheses, spaces and
+    // the keyword "AS"/"COUNT"/"SUM"/"MAX"/"MIN"/"AVG"/"DISTINCT".
+    if (preg_match('/^[A-Za-z0-9_,\.\*\(\)\s]+$/', $trimmed) !== 1) {
+        throw new InvalidArgumentException('Invalid SQL field list');
+    }
+
+    return $trimmed;
+}
+
 
 use Endroid\QrCode\Builder\Builder;
 use Endroid\QrCode\Encoding\Encoding;
@@ -100,6 +155,32 @@ function runShellCommand($command)
 
     return shell_exec($command);
 }
+
+/**
+ * Safer wrapper around runShellCommand() that builds the command from an
+ * absolute binary path plus an array of arguments. Each argument is run
+ * through escapeshellarg() so callers cannot accidentally inject shell
+ * metacharacters even when they pass user-derived data.
+ */
+function safeShellExec(string $binary, array $args = [])
+{
+    if (!is_executable($binary)) {
+        error_log("safeShellExec refused non-executable binary: {$binary}");
+        return null;
+    }
+
+    $parts = [escapeshellarg($binary)];
+    foreach ($args as $arg) {
+        if (!is_scalar($arg)) {
+            error_log('safeShellExec refused non-scalar argument');
+            return null;
+        }
+        $parts[] = escapeshellarg((string) $arg);
+    }
+
+    return runShellCommand(implode(' ', $parts));
+}
+
 
 function deleteDirectory($directory)
 {
@@ -247,10 +328,15 @@ function copyDirectoryContents($source, $destination)
 function step($step, $from_id)
 {
     global $pdo;
+    if ($pdo === null) {
+        error_log('step() called without an active PDO connection');
+        return;
+    }
     $stmt = $pdo->prepare('UPDATE user SET step = ? WHERE id = ?');
     $stmt->execute([$step, $from_id]);
     clearSelectCache('user');
 }
+
 function determineColumnTypeFromValue($value)
 {
     if (is_bool($value)) {
@@ -293,10 +379,28 @@ function ensureColumnExistsForUpdate($tableName, $fieldName, $valueSample = null
 {
     global $pdo;
 
+    // Defence in depth: never even ask information_schema about a name that
+    // contains anything other than [A-Za-z0-9_]. Without this check, a future
+    // caller could trigger a fatal SQL error or - worse - feed an attacker
+    // controlled string through addFieldToTable() (which builds raw DDL).
+    if (!isSafeSqlIdentifier($tableName) || !isSafeSqlIdentifier($fieldName)) {
+        error_log('ensureColumnExistsForUpdate refused unsafe identifier: ' . $tableName . '/' . $fieldName);
+        return;
+    }
+
+    // Cache "we already verified this column exists" per request so that the
+    // INFORMATION_SCHEMA round-trip does not run twice per update() call.
+    static $verified = [];
+    $cacheKey = $tableName . '.' . $fieldName;
+    if (isset($verified[$cacheKey])) {
+        return;
+    }
+
     try {
         $stmt = $pdo->prepare('SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?');
         $stmt->execute([$tableName, $fieldName]);
         if ((int) $stmt->fetchColumn() > 0) {
+            $verified[$cacheKey] = true;
             return;
         }
 
@@ -310,29 +414,51 @@ function ensureColumnExistsForUpdate($tableName, $fieldName, $valueSample = null
         }
 
         addFieldToTable($tableName, $fieldName, $defaultValue, $datatype);
+        $verified[$cacheKey] = true;
     } catch (PDOException $e) {
         error_log('Failed to ensure column exists: ' . $e->getMessage());
     }
 }
+
 function update($table, $field, $newValue, $whereField = null, $whereValue = null)
 {
     global $pdo, $user;
+
+    if ($pdo === null) {
+        error_log('update() called without an active PDO connection');
+        return;
+    }
+
+    // Reject any non-whitelisted identifier before we splice it into raw SQL.
+    if (!isSafeSqlIdentifier($table) || !isSafeSqlIdentifier($field)) {
+        error_log('update() refused unsafe identifier: ' . $table . '/' . $field);
+        return;
+    }
+    if ($whereField !== null && !isSafeSqlIdentifier($whereField)) {
+        error_log('update() refused unsafe where identifier: ' . $whereField);
+        return;
+    }
+
+    $tableQ      = '`' . $table . '`';
+    $fieldQ      = '`' . $field . '`';
+    $whereFieldQ = $whereField !== null ? '`' . $whereField . '`' : null;
 
     $valueToStore = normaliseUpdateValue($newValue);
 
     ensureColumnExistsForUpdate($table, $field, $valueToStore);
 
-    $executeUpdate = function ($value) use ($pdo, $table, $field, $whereField, $whereValue) {
-        if ($whereField !== null) {
-            $stmt = $pdo->prepare("SELECT $field FROM $table WHERE $whereField = ? FOR UPDATE");
+    $executeUpdate = function ($value) use ($pdo, $tableQ, $fieldQ, $whereFieldQ, $whereValue) {
+        if ($whereFieldQ !== null) {
+            $stmt = $pdo->prepare("SELECT {$fieldQ} FROM {$tableQ} WHERE {$whereFieldQ} = ? FOR UPDATE");
             $stmt->execute([$whereValue]);
-            $stmt = $pdo->prepare("UPDATE $table SET $field = ? WHERE $whereField = ?");
+            $stmt = $pdo->prepare("UPDATE {$tableQ} SET {$fieldQ} = ? WHERE {$whereFieldQ} = ?");
             $stmt->execute([$value, $whereValue]);
         } else {
-            $stmt = $pdo->prepare("UPDATE $table SET $field = ?");
+            $stmt = $pdo->prepare("UPDATE {$tableQ} SET {$fieldQ} = ?");
             $stmt->execute([$value]);
         }
     };
+
 
     try {
         $executeUpdate($valueToStore);
@@ -405,6 +531,31 @@ function select($table, $field, $whereField = null, $whereValue = null, $type = 
 {
     global $pdo;
 
+    // Reject any non-whitelisted identifier before we splice it into raw SQL.
+    if (!isSafeSqlIdentifier($table)) {
+        error_log('select() refused unsafe table identifier: ' . (is_scalar($table) ? $table : gettype($table)));
+        return $type === 'count' ? 0 : ($type === 'fetchAll' || $type === 'FETCH_COLUMN' ? [] : null);
+    }
+    if ($whereField !== null && !isSafeSqlIdentifier($whereField)) {
+        error_log('select() refused unsafe where identifier: ' . (is_scalar($whereField) ? $whereField : gettype($whereField)));
+        return $type === 'count' ? 0 : ($type === 'fetchAll' || $type === 'FETCH_COLUMN' ? [] : null);
+    }
+
+    // $field is allowed a slightly richer grammar (e.g. "*", "COUNT(*) AS x")
+    // because some legacy callers pass aggregates. safeSqlFieldList() validates
+    // strictly and throws on anything that isn't a known shape.
+    try {
+        $safeField = safeSqlFieldList($field);
+    } catch (InvalidArgumentException $e) {
+        error_log('select() refused unsafe field list: ' . $e->getMessage());
+        return $type === 'count' ? 0 : ($type === 'fetchAll' || $type === 'FETCH_COLUMN' ? [] : null);
+    }
+
+    if ($pdo === null) {
+        error_log('select() called without an active PDO connection');
+        return $type === 'count' ? 0 : ($type === 'fetchAll' || $type === 'FETCH_COLUMN' ? [] : null);
+    }
+
     $useCache = true;
     if (is_array($options) && array_key_exists('cache', $options)) {
         $useCache = (bool) $options['cache'];
@@ -426,10 +577,10 @@ function select($table, $field, $whereField = null, $whereValue = null, $type = 
         }
     }
 
-    $query = "SELECT $field FROM $table";
+    $query = "SELECT {$safeField} FROM `{$table}`";
 
     if ($whereField !== null) {
-        $query .= " WHERE $whereField = :whereValue";
+        $query .= " WHERE `{$whereField}` = :whereValue";
     }
 
     try {
@@ -465,8 +616,11 @@ function select($table, $field, $whereField = null, $whereValue = null, $type = 
             $result = $fetched === false ? null : $fetched;
         }
     } catch (PDOException $e) {
-        error_log($e->getMessage());
-        die("Query failed: " . $e->getMessage());
+        // Never leak the raw error message to the response - that used to be
+        // echoed straight back to Telegram. Log internally and return a safe
+        // empty result so the worker can still finish the request with HTTP 200.
+        error_log('select() query failed for table ' . $table . ': ' . $e->getMessage());
+        return $type === 'count' ? 0 : ($type === 'fetchAll' || $type === 'FETCH_COLUMN' ? [] : null);
     }
 
     if ($useCache && $cacheKey !== null) {
@@ -481,6 +635,7 @@ function select($table, $field, $whereField = null, $whereValue = null, $type = 
     return $result;
 }
 
+
 function getPaySettingValue($name, $default = null)
 {
     $result = select("PaySetting", "ValuePay", "NamePay", $name, "select");
@@ -492,28 +647,295 @@ function getPaySettingValue($name, $default = null)
 }
 function generateUUID()
 {
-    $data = openssl_random_pseudo_bytes(16);
+    // Prefer the modern CSPRNG. random_bytes() throws on failure, so we fall
+    // back to openssl_random_pseudo_bytes (cryptographically strong on every
+    // PHP build that ships with the openssl extension).
+    try {
+        $data = random_bytes(16);
+    } catch (\Throwable $e) {
+        $data = openssl_random_pseudo_bytes(16);
+    }
     $data[6] = chr(ord($data[6]) & 0x0f | 0x40);
     $data[8] = chr(ord($data[8]) & 0x3f | 0x80);
 
-    $uuid = vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
-
-    return $uuid;
+    return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
 }
+
+/**
+ * Escape a string for safe inclusion in a Telegram HTML message.
+ *
+ * Telegram's HTML parse_mode interprets <, >, & specially; usernames,
+ * first_names and free-form payload from the bot's database can include
+ * arbitrary characters. Without escaping a malicious display name can
+ * break our message layout or inject misleading links.
+ */
+function tg_html_escape($value): string
+{
+    if ($value === null) {
+        return '';
+    }
+    if (!is_scalar($value)) {
+        $value = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+    return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
+
+/**
+ * Load an invoice row and refuse access if it does not belong to the caller.
+ *
+ * Many callback handlers (extend_, removeauto-, transfer_, Extra_volume_, …)
+ * used to do `select('invoice', ..., 'id_invoice', $callback_id, 'select')`
+ * without verifying that the row belonged to $from_id, allowing User A to
+ * pass User B's invoice id and perform privileged actions on it (service
+ * theft, mass deletion, config exfiltration).
+ *
+ * This helper is the single chokepoint for "load invoice for callback":
+ * it returns null on any mismatch and logs the attempt. Pass $skipOwnerCheck
+ * = true only from admin code paths (admin.php), never from end-user flows.
+ */
+function loadOwnedInvoice($id_invoice, $fromId, bool $skipOwnerCheck = false): ?array
+{
+    if (!is_scalar($id_invoice) || (string) $id_invoice === '') {
+        return null;
+    }
+    $row = select('invoice', '*', 'id_invoice', (string) $id_invoice, 'select');
+    if (!is_array($row)) {
+        return null;
+    }
+    if (!$skipOwnerCheck && (string) ($row['id_user'] ?? '') !== (string) $fromId) {
+        error_log(sprintf(
+            'IDOR refused: user %s attempted to access invoice %s (owner %s)',
+            (string) $fromId,
+            (string) $id_invoice,
+            (string) ($row['id_user'] ?? '?')
+        ));
+        return null;
+    }
+    return $row;
+}
+
+/**
+ * Variant that looks up by panel username instead of id_invoice. Same
+ * ownership guarantee.
+ */
+function loadOwnedInvoiceByUsername($username, $fromId, bool $skipOwnerCheck = false): ?array
+{
+    if (!is_scalar($username) || (string) $username === '') {
+        return null;
+    }
+    $row = select('invoice', '*', 'username', (string) $username, 'select');
+    if (!is_array($row)) {
+        return null;
+    }
+    if (!$skipOwnerCheck && (string) ($row['id_user'] ?? '') !== (string) $fromId) {
+        error_log(sprintf(
+            'IDOR refused (by username): user %s attempted to access %s (owner %s)',
+            (string) $fromId,
+            (string) $username,
+            (string) ($row['id_user'] ?? '?')
+        ));
+        return null;
+    }
+    return $row;
+}
+
+/**
+ * Helper for validating user-supplied integer amounts that originate from
+ * Telegram text input (wallet top-ups, extra volume, custom service length).
+ *
+ * Replaces the historical `is_numeric($text)` checks that accepted scientific
+ * notation, leading +/- and (in some PHP builds) hexadecimal literals -
+ * any of which would later produce surprising values when concatenated into
+ * SQL or shell strings.
+ *
+ * Returns int on success, false on failure.
+ */
+function recordExists(string $table, string $column, $value): bool
+{
+    global $pdo;
+
+    static $allowed = [
+        'user' => ['id', 'username'],
+        'admin' => ['id_admin'],
+        'invoice' => ['id_invoice', 'username'],
+        'Discount' => ['code'],
+        'DiscountSell' => ['codeDiscount'],
+        'Payment_report' => ['price', 'id_order'],
+        'marzban_panel' => ['name_panel'],
+        'product' => ['name_product'],
+        'card_number' => ['cardnumber'],
+        'channels' => ['link'],
+    ];
+
+    if ($pdo === null || !isset($allowed[$table]) || !in_array($column, $allowed[$table], true)) {
+        return false;
+    }
+
+    try {
+        $stmt = $pdo->prepare("SELECT 1 FROM `{$table}` WHERE `{$column}` = ? LIMIT 1");
+        $stmt->execute([(string) $value]);
+        return (bool) $stmt->fetchColumn();
+    } catch (PDOException $e) {
+        error_log('recordExists failed: ' . $e->getMessage());
+        return false;
+    }
+}
+
+function isAdmin($fromId): bool
+{
+    return recordExists('admin', 'id_admin', (string) $fromId);
+}
+
+function getAdminIds(): array
+{
+    $ids = select('admin', 'id_admin', null, null, 'FETCH_COLUMN');
+
+    return is_array($ids) ? $ids : [];
+}
+
+function unpaidPaymentAmountExists(int $amount): bool
+{
+    global $pdo;
+
+    if ($pdo === null) {
+        return false;
+    }
+
+    try {
+        $stmt = $pdo->prepare(
+            "SELECT 1 FROM Payment_report
+             WHERE price = ? AND payment_Status IN ('Unpaid', 'waiting')
+             LIMIT 1"
+        );
+        $stmt->execute([$amount]);
+        return (bool) $stmt->fetchColumn();
+    } catch (PDOException $e) {
+        error_log('unpaidPaymentAmountExists failed: ' . $e->getMessage());
+        return false;
+    }
+}
+
+function verifyPaymentWebhookSecret(string $encodedSecret): bool
+{
+    global $pdo, $payment_webhook_key;
+
+    $decoded = base64_decode($encodedSecret, true);
+    if (!is_string($decoded) || $decoded === '') {
+        return false;
+    }
+
+    if (!empty($payment_webhook_key)) {
+        return hash_equals((string) $payment_webhook_key, $decoded);
+    }
+
+    if ($pdo === null) {
+        return false;
+    }
+
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM admin WHERE password = ?');
+    $stmt->execute([$decoded]);
+
+    return (int) $stmt->fetchColumn() > 0;
+}
+
+function shouldRefundBalanceOnProvisioningFailure(array $paymentReport): bool
+{
+    $method = strtolower(trim((string) ($paymentReport['Payment_Method'] ?? '')));
+
+    return in_array($method, ['wallet', 'کیف پول'], true);
+}
+
+function applyCurlTlsOptions($ch): void
+{
+    global $allow_self_signed_certs;
+
+    $allowSelfSigned = !empty($allow_self_signed_certs);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, !$allowSelfSigned);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, $allowSelfSigned ? 0 : 2);
+}
+
+function validateUserAmount($value, int $min, int $max)
+{
+    if (!is_scalar($value)) {
+        return false;
+    }
+    $trimmed = trim((string) $value);
+    if ($trimmed === '' || !preg_match('/^\d+$/', $trimmed)) {
+        return false;
+    }
+    $int = (int) $trimmed;
+    if ($int < $min || $int > $max) {
+        return false;
+    }
+    return $int;
+}
+
+
+/**
+ * Helper for fetching small remote payloads with hard timeouts. Always
+ * returns either the response body string or null - never blocks the
+ * webhook for more than $timeoutSeconds.
+ */
+function httpGetWithTimeout(string $url, int $timeoutSeconds = 4): ?string
+{
+    $ch = curl_init();
+    if ($ch === false) {
+        return null;
+    }
+
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_TIMEOUT        => $timeoutSeconds,
+        CURLOPT_CONNECTTIMEOUT => min(3, $timeoutSeconds),
+        // External rate sources sometimes have older certs but we still
+        // verify the hostname. Per-call SSL toggles should live next to
+        // the gateway-specific helpers.
+        CURLOPT_SSL_VERIFYHOST => 2,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+
+    $body = curl_exec($ch);
+    if ($body === false) {
+        error_log('httpGetWithTimeout failed (' . $url . '): ' . curl_error($ch));
+        curl_close($ch);
+        return null;
+    }
+    curl_close($ch);
+
+    return is_string($body) ? $body : null;
+}
+
 function rate_arze()
 {
-    $arze_rate = [];
-    $requests_tron = json_decode(file_get_contents('https://api.diadata.org/v1/assetQuotation/Tron/0x0000000000000000000000000000000000000000'), true);
-    $html_read = file_get_contents("https://www.bon-bast.com/");
-    preg_match('/<span>\s*([\d,]+)\s*<\/span>/', $html_read, $matches);
-    if (!empty($matches[1])) {
-        $requestsusd = str_replace(',', '', $matches[1]);
+    // Two synchronous outbound HTTP calls used to block every caller for
+    // up to default_socket_timeout (~60s). Cache the result for 5 minutes
+    // and enforce hard per-request timeouts so the bot stays responsive
+    // when the upstream rate sources are slow or unreachable.
+    static $cache = null;
+    if ($cache !== null && (time() - $cache['fetched_at']) < 300) {
+        return $cache['rate'];
     }
-    $arze_rate['USD'] = intval($requestsusd);
-    $arze_rate['TRX'] = intval($requests_tron['Price'] * $arze_rate['USD']);
 
+    $arze_rate = ['USD' => 0, 'TRX' => 0];
+
+    $tronJson = httpGetWithTimeout('https://api.diadata.org/v1/assetQuotation/Tron/0x0000000000000000000000000000000000000000', 4);
+    $requests_tron = $tronJson !== null ? json_decode($tronJson, true) : null;
+
+    $html_read = httpGetWithTimeout('https://www.bon-bast.com/', 4);
+    if (is_string($html_read) && preg_match('/<span>\s*([\d,]+)\s*<\/span>/', $html_read, $matches)) {
+        $arze_rate['USD'] = intval(str_replace(',', '', $matches[1]));
+    }
+
+    if (is_array($requests_tron) && isset($requests_tron['Price']) && $arze_rate['USD'] > 0) {
+        $arze_rate['TRX'] = intval(((float) $requests_tron['Price']) * $arze_rate['USD']);
+    }
+
+    $cache = ['rate' => $arze_rate, 'fetched_at' => time()];
     return $arze_rate;
 }
+
 function updatePaymentMessageId($response, $orderId)
 {
     if (!is_array($response)) {
@@ -697,21 +1119,25 @@ function outputlink($text)
     curl_setopt($ch, CURLOPT_URL, $text);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_TIMEOUT_MS, 6000);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 3);
     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    applyCurlTlsOptions($ch);
     $userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
     curl_setopt($ch, CURLOPT_USERAGENT, $userAgent);
+
     $response = curl_exec($ch);
     if ($response === false) {
-        $error = curl_error($ch);
+        error_log('outputlink failed: ' . curl_error($ch));
+        curl_close($ch);
         return null;
-    } else {
-        return $response;
     }
 
+    // Always release the handle - the previous implementation had an
+    // unreachable curl_close() after the if/else, leaking handles.
     curl_close($ch);
+    return $response;
 }
+
 function DirectPayment($order_id, $image = 'images.jpg')
 {
     global $pdo, $ManagePanel, $textbotlang, $keyboardextendfnished, $keyboard, $Confirm_pay, $from_id, $message_id, $datatextbot;
@@ -769,10 +1195,12 @@ function DirectPayment($order_id, $image = 'images.jpg')
         $dataoutput = $ManagePanel->createUser($marzban_list_get['name_panel'], $info_product['code_product'], $username_ac, $datac);
         if ($dataoutput['username'] == null) {
             $dataoutput['msg'] = json_encode($dataoutput['msg']);
-            $balance = $Balance_id['Balance'] + $Payment_report['price'];
-            update("user", "Balance", $balance, "id", $Balance_id['id']);
+            if (shouldRefundBalanceOnProvisioningFailure($Payment_report)) {
+                $balance = intval($Balance_id['Balance']) + intval($Payment_report['price']);
+                update("user", "Balance", $balance, "id", $Balance_id['id']);
+                sendmessage($Balance_id['id'], "💎  کاربر عزیز بدلیل ساخته نشدن سرویس مبلغ $balance تومان به کیف پول شما اضافه گردید.", $keyboard, 'HTML');
+            }
             sendmessage($Balance_id['id'], $textbotlang['users']['sell']['ErrorConfig'], $keyboard, 'HTML');
-            sendmessage($Balance_id['id'], "💎  کاربر عزیز بدلیل ساخته نشدن سرویس مبلغ $balance تومان به کیف پول شما اضافه گردید.", $keyboard, 'HTML');
             $texterros = "
 ⭕️ خطا در ساخت کانفیگ
 ✍️ دلیل خطا : 
@@ -1024,10 +1452,12 @@ $textonebuy
         update("user", "Balance", $Balance_Low_user, "id", $Balance_id['id']);
         $extend = $ManagePanel->extend($marzban_list_get['Methodextend'], $prodcut['Volume_constraint'], $prodcut['Service_time'], $nameloc['username'], $prodcut['code_product'], $marzban_list_get['code_panel']);
         if ($extend['status'] == false) {
-            $balance = $Balance_id['Balance'] + $Payment_report['price'];
-            update("user", "Balance", $balance, "id", $Balance_id['id']);
+            if (shouldRefundBalanceOnProvisioningFailure($Payment_report)) {
+                $balance = intval($Balance_id['Balance']) + intval($Payment_report['price']);
+                update("user", "Balance", $balance, "id", $Balance_id['id']);
+                sendmessage($Balance_id['id'], "💎  کاربر عزیز بدلیل تمدید نشدن سرویس مبلغ $balance تومان به کیف پول شما اضافه گردید.", $keyboard, 'HTML');
+            }
             sendmessage($Balance_id['id'], $textbotlang['users']['sell']['ErrorConfig'], $keyboard, 'HTML');
-            sendmessage($Balance_id['id'], "💎  کاربر عزیز بدلیل تمدید نشدن سرویس مبلغ $balance تومان به کیف پول شما اضافه گردید.", $keyboard, 'HTML');
             $extend['msg'] = json_encode($extend['msg']);
             $textreports = "
         خطای تمدید سرویس
@@ -1083,7 +1513,7 @@ $textonebuy
         }
         if (intval($valurcashbackextend) != 0) {
             $result = ($prodcut['price_product'] * $valurcashbackextend) / 100;
-            $pricelastextend = $result;
+            $pricelastextend = intval($Balance_id['Balance']) + intval($result);
             update("user", "Balance", $pricelastextend, "id", $Balance_id['id']);
             sendmessage($Balance_id['id'], "تبریک 🎉
 📌 به عنوان هدیه تمدید مبلغ $result تومان حساب شما شارژ گردید", null, 'HTML');
@@ -1371,22 +1801,26 @@ function confirmPaymentAtomically($orderId, $providerPayload = [], $image = '../
         ];
     }
 
-    $startedTransaction = !$pdo->inTransaction();
+    if ($pdo === null) {
+        return [
+            'confirmed' => false,
+            'status' => 'error',
+            'reason' => 'no_database',
+            'payment_report' => null,
+        ];
+    }
+
+    $paymentReport = null;
 
     try {
-        if ($startedTransaction) {
-            $pdo->beginTransaction();
-        }
+        $pdo->beginTransaction();
 
         $stmt = $pdo->prepare("SELECT * FROM Payment_report WHERE id_order = :id_order LIMIT 1 FOR UPDATE");
         $stmt->execute([':id_order' => $orderId]);
         $paymentReport = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$paymentReport) {
-            if ($startedTransaction) {
-                $pdo->commit();
-            }
-
+            $pdo->commit();
             return [
                 'confirmed' => false,
                 'status' => 'ignored',
@@ -1395,11 +1829,9 @@ function confirmPaymentAtomically($orderId, $providerPayload = [], $image = '../
             ];
         }
 
-        if (($paymentReport['payment_Status'] ?? '') === 'paid') {
-            if ($startedTransaction) {
-                $pdo->commit();
-            }
-
+        $currentStatus = (string) ($paymentReport['payment_Status'] ?? '');
+        if ($currentStatus === 'paid') {
+            $pdo->commit();
             return [
                 'confirmed' => false,
                 'status' => 'ignored',
@@ -1408,26 +1840,30 @@ function confirmPaymentAtomically($orderId, $providerPayload = [], $image = '../
             ];
         }
 
-        DirectPayment($paymentReport['id_order'], $image);
-
-        $stmt = $pdo->prepare("UPDATE Payment_report SET payment_Status = 'paid' WHERE id_order = :id_order");
-        $stmt->execute([':id_order' => $paymentReport['id_order']]);
-        $paymentReport['payment_Status'] = 'paid';
-        clearSelectCache('Payment_report');
-
-        if ($startedTransaction) {
-            $pdo->commit();
+        if ($currentStatus !== 'processing') {
+            $claim = $pdo->prepare(
+                "UPDATE Payment_report
+                 SET payment_Status = 'processing'
+                 WHERE id_order = :id_order
+                   AND payment_Status IN ('Unpaid', 'waiting')"
+            );
+            $claim->execute([':id_order' => $orderId]);
+            if ($claim->rowCount() === 0) {
+                $pdo->commit();
+                return [
+                    'confirmed' => false,
+                    'status' => 'ignored',
+                    'reason' => 'already_claimed',
+                    'payment_report' => $paymentReport,
+                ];
+            }
+            clearSelectCache('Payment_report');
+            $paymentReport['payment_Status'] = 'processing';
         }
 
-        return [
-            'confirmed' => true,
-            'status' => 'confirmed',
-            'reason' => null,
-            'payment_report' => $paymentReport,
-            'provider_payload' => $providerPayload,
-        ];
+        $pdo->commit();
     } catch (Throwable $e) {
-        if ($startedTransaction && $pdo->inTransaction()) {
+        if ($pdo->inTransaction()) {
             $pdo->rollBack();
         }
 
@@ -1438,6 +1874,32 @@ function confirmPaymentAtomically($orderId, $providerPayload = [], $image = '../
             'status' => 'error',
             'reason' => $e->getMessage(),
             'payment_report' => null,
+        ];
+    }
+
+    try {
+        DirectPayment($orderId, $image);
+
+        $stmt = $pdo->prepare("UPDATE Payment_report SET payment_Status = 'paid' WHERE id_order = :id_order");
+        $stmt->execute([':id_order' => $orderId]);
+        clearSelectCache('Payment_report');
+        $paymentReport['payment_Status'] = 'paid';
+
+        return [
+            'confirmed' => true,
+            'status' => 'confirmed',
+            'reason' => null,
+            'payment_report' => $paymentReport,
+            'provider_payload' => $providerPayload,
+        ];
+    } catch (Throwable $e) {
+        error_log('DirectPayment failed for order ' . $orderId . ': ' . $e->getMessage());
+
+        return [
+            'confirmed' => false,
+            'status' => 'error',
+            'reason' => $e->getMessage(),
+            'payment_report' => $paymentReport,
         ];
     }
 }
@@ -1454,12 +1916,21 @@ function plisio($order_id, $price)
     $url .= '&order_name=plisio';
     $url .= '&language=fa';
     $url .= '&api_key=' . urlencode($api_key);
+
     $ch = curl_init($url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    $response = json_decode(curl_exec($ch), true);
-    return $response['data'];
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
+
+    $raw = curl_exec($ch);
+    // Close the handle before returning - the previous implementation had a
+    // dead `curl_close()` after `return`, leaking handles every request.
     curl_close($ch);
+
+    $response = is_string($raw) ? json_decode($raw, true) : null;
+    return $response['data'] ?? null;
 }
+
 function checkConnection($address, $port)
 {
     $socket = @stream_socket_client("tcp://$address:$port", $errno, $errstr, 5);
@@ -1488,27 +1959,54 @@ function savedata($type, $namefiled, $valuefiled)
 function addFieldToTable($tableName, $fieldName, $defaultValue = null, $datatype = "VARCHAR(500)")
 {
     global $pdo;
-    $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM information_schema.tables WHERE table_name = :tableName");
+
+    // This helper builds raw DDL (ALTER TABLE …) which cannot be parameterised
+    // and therefore MUST validate identifiers strictly. We also validate the
+    // datatype against a known allow-list to be safe.
+    if (!isSafeSqlIdentifier($tableName) || !isSafeSqlIdentifier($fieldName)) {
+        error_log('addFieldToTable refused unsafe identifier: ' . $tableName . '/' . $fieldName);
+        return;
+    }
+
+    if (!is_string($datatype) || preg_match('/^[A-Za-z0-9_\(\),\s]+(?:\s+CHARACTER\s+SET\s+[A-Za-z0-9_]+)?(?:\s+COLLATE\s+[A-Za-z0-9_]+)?$/i', $datatype) !== 1) {
+        error_log('addFieldToTable refused unsafe datatype: ' . (is_scalar($datatype) ? $datatype : gettype($datatype)));
+        return;
+    }
+
+    if ($pdo === null) {
+        error_log('addFieldToTable called without an active PDO connection');
+        return;
+    }
+
+    $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = :tableName");
     $stmt->bindParam(':tableName', $tableName);
     $stmt->execute();
     $tableExists = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($tableExists['count'] == 0)
+    if ((int) ($tableExists['count'] ?? 0) === 0)
         return;
-    $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?");
-    $stmt->execute([$pdo->query("SELECT DATABASE()")->fetchColumn(), $tableName, $fieldName]);
+
+    $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?");
+    $stmt->execute([$tableName, $fieldName]);
     $filedExists = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($filedExists['count'] != 0)
+    if ((int) ($filedExists['count'] ?? 0) !== 0)
         return;
-    $query = "ALTER TABLE $tableName ADD $fieldName $datatype";
+
+    // Identifiers are whitelisted above, datatype is grammar-checked above.
+    $query = "ALTER TABLE `{$tableName}` ADD `{$fieldName}` " . $datatype;
     $statement = $pdo->prepare($query);
     $statement->execute();
-    if ($defaultValue != null) {
-        $stmt = $pdo->prepare("UPDATE $tableName SET $fieldName= ?");
-        $stmt->bindParam(1, $defaultValue);
+
+    if ($defaultValue !== null) {
+        $stmt = $pdo->prepare("UPDATE `{$tableName}` SET `{$fieldName}` = ?");
+        $stmt->bindValue(1, $defaultValue);
         $stmt->execute();
     }
-    echo "The $fieldName field was added ✅";
+
+    // Suppress noisy console output for CLI/cron callers; keep an admin trace
+    // available via error_log.
+    error_log("addFieldToTable: added column {$tableName}.{$fieldName}");
 }
+
 function outtypepanel($typepanel, $message)
 {
     global $from_id, $optionMarzban, $optionX_ui_single, $optionhiddfy, $optionalireza, $optionalireza_single, $optionmarzneshin, $option_mikrotik, $optionwg, $options_ui, $optioneylanpanel, $optionibsng;
@@ -1839,16 +2337,53 @@ function publickey()
 }
 function languagechange($path_dir)
 {
-    $setting = select("setting", "*");
-    return json_decode(file_get_contents($path_dir), true)['fa'];
-    if (intval($setting['languageen']) == 1) {
-        return json_decode(file_get_contents($path_dir), true)['en'];
-    } elseif (intval($setting['languageru']) == 1) {
-        return json_decode(file_get_contents($path_dir), true)['ru'];
-    } else {
-        return json_decode(file_get_contents($path_dir), true)['fa'];
+    // text.json is large and was previously decoded multiple times per
+    // webhook (every cron, every payment script, every keyboard rebuild).
+    // Cache the decoded payload per request and only re-read the file when
+    // its mtime changes.
+    static $cache = [];
+
+    $absolute = realpath($path_dir);
+    if ($absolute === false) {
+        error_log("languagechange: language file not found: {$path_dir}");
+        return [];
     }
+
+    $mtime = @filemtime($absolute) ?: 0;
+    $cacheKey = $absolute . ':' . $mtime;
+
+    if (isset($cache[$cacheKey])) {
+        $decoded = $cache[$cacheKey];
+    } else {
+        $raw = @file_get_contents($absolute);
+        if ($raw === false) {
+            error_log("languagechange: failed to read {$absolute}");
+            return [];
+        }
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            error_log("languagechange: invalid JSON in {$absolute}");
+            return [];
+        }
+        // Keep memory bounded by only retaining the most recent decode.
+        $cache = [$cacheKey => $decoded];
+    }
+
+    // Resolve preferred language - was previously dead code after an early
+    // `return ...['fa'];` line.
+    $setting = select('setting', '*');
+    if (is_array($setting)) {
+        if (intval($setting['languageen'] ?? 0) === 1 && isset($decoded['en'])) {
+            return $decoded['en'];
+        }
+        if (intval($setting['languageru'] ?? 0) === 1 && isset($decoded['ru'])) {
+            return $decoded['ru'];
+        }
+    }
+
+    return $decoded['fa'] ?? [];
 }
+
 function generateAuthStr($length = 10)
 {
     $characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';

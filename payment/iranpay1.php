@@ -77,28 +77,36 @@ if ($StatusPayment == 100) {
     if (!empty($response['status']) && $response['status'] == 100) {
         $payment_status = "پرداخت موفق";
         $dec_payment_status = "از انجام تراکنش متشکریم!";
-        $Payment_report = select("Payment_report", "*", "id_order", $invoice_id, "select");
-        if ($Payment_report['payment_Status'] != "paid") {
-            $textbotlang = languagechange('../text.json');
-            DirectPayment($invoice_id, "../images.jpg");
+        $textbotlang = languagechange('../text.json');
+
+        try {
+            $confirmation = confirmPaymentAtomically($invoice_id, [
+                'provider' => 'iranpay1',
+                'response' => $response,
+            ], '../images.jpg');
+        } catch (Throwable $e) {
+            error_log('iranpay1.php confirmation failed: ' . $e->getMessage());
+            $confirmation = ['status' => 'error', 'confirmed' => false, 'payment_report' => null];
+        }
+
+        if (($confirmation['status'] ?? '') !== 'error' && !empty($confirmation['confirmed']) && is_array($confirmation['payment_report'] ?? null)) {
+            $Payment_report = $confirmation['payment_report'];
             $pricecashback = select("PaySetting", "ValuePay", "NamePay", "chashbackiranpay1", "select")['ValuePay'];
             $Balance_id = select("user", "*", "id", $Payment_report['id_user'], "select");
-            if ($pricecashback != "0") {
-                $result = ($Payment_report['price'] * $pricecashback) / 100;
+            if ($pricecashback != "0" && is_array($Balance_id)) {
+                $result = ((float) $Payment_report['price']) * ((float) $pricecashback) / 100;
                 $Balance_confrim = intval($Balance_id['Balance']) + $result;
                 update("user", "Balance", $Balance_confrim, "id", $Balance_id['id']);
-                $pricecashback = number_format($pricecashback);
                 $text_report = "🎁 کاربر عزیز مبلغ $result تومان به عنوان هدیه واریز به حساب شما واریز گردید.";
                 sendmessage($Balance_id['id'], $text_report, null, 'HTML');
             }
-            update("Payment_report", "payment_Status", "paid", "id_order", $Payment_report['id_order']);
             $paymentreports = select("topicid", "idreport", "report", "paymentreport", "select")['idreport'];
-            $price = number_format($price);
+            $priceFormatted = number_format((float) $Payment_report['price']);
             $text_report = "💵 پرداخت جدید
         
 آیدی عددی کاربر : {$Payment_report['id_user']}
-نام کاربری کاربر : {$Balance_id['username']}
-مبلغ تراکنش $price
+نام کاربری کاربر : " . (is_array($Balance_id) ? ($Balance_id['username'] ?? '') : '') . "
+مبلغ تراکنش $priceFormatted
 روش پرداخت : ارزی ریالی اول";
             if (strlen($setting['Channel_Report']) > 0) {
                 telegram('sendmessage', [
