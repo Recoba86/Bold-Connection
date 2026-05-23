@@ -84,7 +84,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       </div>
       <div class="auth-quote">
         <h2>برای حمایت لطفا به <a style="color:#a8dafd !important  "
-            href="https://github.com/mahdiMGF2/mirzabot">پروژه</a>
+            href="https://github.com/Recoba86/Bold-Connection">Project</a>
           استار و
           دونیت دهید</h2>
         <cite>پنل مدیریت میرزا</cite>

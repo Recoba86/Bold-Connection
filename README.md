@@ -202,6 +202,7 @@ See [docs/installer.md](docs/installer.md) for menu options (install / update / 
 | [docs/modules.md](docs/modules.md) | Payment, panel, cron, and mini-app modules |
 | [docs/security.md](docs/security.md) | Security model and hardening checklist |
 | [docs/installer.md](docs/installer.md) | Installer reference & troubleshooting |
+| [docs/cleanup-mirza-and-install.md](docs/cleanup-mirza-and-install.md) | Remove old Mirza Pro install, install Bold Connection only |
 | [docs/راهنمای-نصب-تلگرام-و-پنل.md](docs/راهنمای-نصب-تلگرام-و-پنل.md) | Persian Telegram + panel setup guide |
 
 ---
