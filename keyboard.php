@@ -1296,7 +1296,7 @@ $keyboardtypepanel = json_encode([
             ['text' => "مرزنشین", 'callback_data' => "typepanel#marzneshin"]
         ],
         [
-            ['text' => 'ثنایی تک پورت', 'callback_data' => 'typepanel#x-ui_single'],
+            ['text' => '3x-ui (ثنایی)', 'callback_data' => 'typepanel#x-ui_single'],
             ['text' => 'علیرضا تک پورت', 'callback_data' => 'typepanel#alireza_single']
         ],
         [
