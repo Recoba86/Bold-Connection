@@ -44,8 +44,8 @@ readonly NC='\033[0m'
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-log_info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
-log_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
+log_info()  { echo -e "${GREEN}[INFO]${NC} $*" >&2; }
+log_warn()  { echo -e "${YELLOW}[WARN]${NC} $*" >&2; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 die() { log_error "$*"; exit 1; }
@@ -186,13 +186,11 @@ get_git_clone_url() {
         local gh_token
         gh_token="$(gh auth token 2>/dev/null || true)"
         if [[ -n "${gh_token}" ]]; then
-            log_info "Using GitHub CLI authentication."
             echo "https://x-access-token:${gh_token}@github.com/${REPO_SLUG}.git"
             return 0
         fi
     fi
 
-    log_info "No GitHub token — cloning as public repository (${REPO_SLUG})."
     echo "https://github.com/${REPO_SLUG}.git"
 }
 
@@ -217,6 +215,12 @@ git_clone_or_update() {
 
     local clone_url
     clone_url="$(get_git_clone_url)"
+
+    if [[ "${clone_url}" == *"@github.com/"* ]]; then
+        log_info "Cloning with authenticated GitHub URL."
+    else
+        log_info "No GitHub token — cloning public repository (${REPO_SLUG})."
+    fi
 
     if [[ -d "${target}/.git" ]]; then
         log_info "Updating repository in ${target}..."
