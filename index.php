@@ -40,6 +40,92 @@ if (!is_array($setting)) {
     $setting = [];
 }
 $ManagePanel = new ManagePanel();
+
+function showFixedPlanSelectionForPanel(array $panel, $editMessage = false, $backCallback = 'buyback')
+{
+    global $from_id, $message_id, $user;
+
+    $plans = fixedPlanListForPanel($panel['code_panel'] ?? '', $user['agent'] ?? 'f', true);
+    $validPlans = [];
+    foreach ($plans as $plan) {
+        if (fixedPlanBuildSnapshot($plan)['valid']) {
+            $validPlans[] = $plan;
+        }
+    }
+    if (empty($validPlans)) {
+        $message = "❌ هیچ پلن فعالی برای این پنل تعریف نشده است. لطفا بعدا دوباره بررسی کنید.";
+        if ($editMessage) {
+            Editmessagetext($from_id, $message_id, $message, json_encode(['inline_keyboard' => [[['text' => 'بازگشت', 'callback_data' => $backCallback]]]], JSON_UNESCAPED_UNICODE));
+        } else {
+            sendmessage($from_id, $message, null, 'HTML');
+        }
+        error_log('fixed_plan:no_active_plan:' . json_encode(['panel' => $panel['code_panel'] ?? null, 'agent' => $user['agent'] ?? null], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        return;
+    }
+
+    $keyboard = fixedPlanUserKeyboard($panel, $user['agent'] ?? 'f', $backCallback);
+    $message = "📦 یکی از پلن های آماده را انتخاب کنید:";
+    if ($editMessage) {
+        Editmessagetext($from_id, $message_id, $message, $keyboard);
+    } else {
+        sendmessage($from_id, $message, $keyboard, 'HTML');
+    }
+}
+
+function showFixedPlanInvoicePreview($planId, $requestedUsername = null)
+{
+    global $from_id, $message_id, $username, $user, $textbotlang, $paymentom, $ManagePanel;
+
+    $userdate = json_decode($user['Processing_value'], true);
+    if (!is_array($userdate) || empty($userdate['name_panel'])) {
+        sendmessage($from_id, "❌ مراحل خرید را مجددا از اول انجام دهید", null, 'HTML');
+        step('home', $from_id);
+        return;
+    }
+
+    $panel = select('marzban_panel', '*', 'name_panel', $userdate['name_panel'], 'select');
+    $plan = fixedPlanGetById($planId);
+    if (!$panel || !$plan || !fixedPlanIsPurchasable($plan, $panel, $user['agent'])) {
+        sendmessage($from_id, "❌ این پلن در دسترس نیست.", null, 'HTML');
+        step('home', $from_id);
+        return;
+    }
+
+    $snapshot = fixedPlanBuildSnapshot($plan);
+    if (!$snapshot['valid']) {
+        sendmessage($from_id, "❌ قیمت نهایی این پلن معتبر نیست. برای پلن رایگان باید گزینه رایگان فعال باشد.", null, 'HTML');
+        step('home', $from_id);
+        return;
+    }
+
+    $customUsername = $panel['MethodUsername'] == $textbotlang['users']['customusername'] || $panel['MethodUsername'] == "نام کاربری دلخواه + عدد رندوم";
+    if ($customUsername && $requestedUsername === null) {
+        update('user', 'Processing_value_one', 'fixedplan_' . intval($planId), 'id', $from_id);
+        sendmessage($from_id, $textbotlang['users']['selectusername'], null, 'HTML');
+        step('fixedplan_get_username', $from_id);
+        return;
+    }
+
+    $randomString = bin2hex(random_bytes(2));
+    $rawUsername = $requestedUsername === null ? '' : strtolower(trim((string) $requestedUsername));
+    if ($customUsername && !preg_match('~(?!_)^[a-z][a-z\d_]{2,32}(?<!_)$~i', $rawUsername)) {
+        sendmessage($from_id, $textbotlang['users']['invalidusername'], null, 'HTML');
+        return;
+    }
+
+    $username_ac = generateUsername($from_id, $panel['MethodUsername'], $username, $randomString, $rawUsername, $panel['namecustom'], $user['namecustom']);
+    $username_ac = strtolower($username_ac);
+    $DataUserOut = $ManagePanel->DataUser($panel['name_panel'], $username_ac);
+    if (isset($DataUserOut['username']) || recordExists('invoice', 'username', $username_ac)) {
+        $username_ac = rand(1000000, 9999999) . "_" . $username_ac;
+    }
+
+    update('user', 'Processing_value_one', 'fixedplan_' . intval($planId), 'id', $from_id);
+    update('user', 'Processing_value_tow', $username_ac, 'id', $from_id);
+    sendmessage($from_id, fixedPlanInvoicePreviewText($username_ac, $snapshot, $user['Balance']), $paymentom, 'HTML');
+    step('payment', $from_id);
+}
+
 $keyboard_check = json_decode($setting['keyboardmain'], true);
 if (is_array($keyboard_check) && preg_match('/[\x{600}-\x{6FF}\x{FB50}-\x{FDFF}]/u', $keyboard_check['keyboard'][0][0]['text'])) {
     $keyboardmain = '{"keyboard":[[{"text":"text_sell"},{"text":"text_extend"}],[{"text":"text_usertest"},{"text":"text_wheel_luck"}],[{"text":"text_Purchased_services"},{"text":"accountwallet"}],[{"text":"text_affiliates"},{"text":"text_Tariff_list"}],[{"text":"text_support"},{"text":"text_help"}]]}';
@@ -3762,6 +3848,10 @@ $textinvite
         } else {
             savedata('clear', "name_panel", $location);
         }
+        if (fixedPlanModeEnabled()) {
+            showFixedPlanSelectionForPanel($locationproduct, $datain == "buy" || $datain == "buybacktow", $statusnote ? "buyback" : "backuser");
+            return;
+        }
         if ($setting['statuscategory'] == "offcategory") {
             $marzban_list_get = $locationproduct;
             $eextraprice = json_decode($marzban_list_get['pricecustomvolume'], true);
@@ -3870,6 +3960,10 @@ $textinvite
         savedata('clear', "name_panel", $location);
     }
     $nullproduct = select("product", "*", null, null, "count");
+    if (fixedPlanModeEnabled()) {
+        showFixedPlanSelectionForPanel($marzban_list_get, true, "buybacktow");
+        return;
+    }
     if ($nullproduct == 0) {
         $eextraprice = json_decode($marzban_list_get['pricecustomvolume'], true);
         $custompricevalue = $eextraprice[$user['agent']];
@@ -3975,6 +4069,17 @@ $textinvite
         }
         Editmessagetext($from_id, $message_id, $textbotlang['users']['sell']['Service-select-first'], KeyboardProduct($marzban_list_get['name_panel'], $query, $user['pricediscount'], $datakeyboard, $statuscustom));
     }
+} elseif (preg_match('/^fixedplan_(\d+)/', $datain, $dataget)) {
+    showFixedPlanInvoicePreview(intval($dataget[1]));
+    deletemessage($from_id, $message_id);
+} elseif ($user['step'] == "fixedplan_get_username") {
+    $parts = explode('_', (string) $user['Processing_value_one']);
+    if (($parts[0] ?? '') !== 'fixedplan' || empty($parts[1])) {
+        sendmessage($from_id, "❌ مراحل خرید را مجددا از اول انجام دهید", $keyboard, 'HTML');
+        step('home', $from_id);
+        return;
+    }
+    showFixedPlanInvoicePreview(intval($parts[1]), $text);
 } elseif ($datain == "customsellvolume") {
     $userdate = json_decode($user['Processing_value'], true);
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $userdate['name_panel'], "select");
@@ -4151,6 +4256,151 @@ $textinvite
         sendmessage($from_id, $textin, $payment, 'HTML');
     }
     step('payment', $from_id);
+} elseif ($user['step'] == "payment" && $datain == "confirmandgetservice" && strpos((string) $user['Processing_value_one'], 'fixedplan_') === 0) {
+    $userdate = json_decode($user['Processing_value'], true);
+    Editmessagetext($from_id, $message_id, $text_inline, json_encode(['inline_keyboard' => []]));
+    if (!is_array($userdate) || empty($userdate['name_panel'])) {
+        sendmessage($from_id, "❌ مراحل خرید را مجددا از اول انجام دهید", $keyboard, 'HTML');
+        step('home', $from_id);
+        return;
+    }
+    $planId = intval(substr((string) $user['Processing_value_one'], strlen('fixedplan_')));
+    $marzban_list_get = select("marzban_panel", "*", "name_panel", $userdate['name_panel'], "select");
+    $plan = fixedPlanGetById($planId);
+    if (!$marzban_list_get || !$plan || !fixedPlanIsPurchasable($plan, $marzban_list_get, $user['agent'])) {
+        sendmessage($from_id, "❌ این پلن در دسترس نیست.", $keyboard, 'HTML');
+        step('home', $from_id);
+        return;
+    }
+    if ($marzban_list_get['status'] == "disable") {
+        sendmessage($from_id, "❌ این پنل در دسترس نیست لطفا از پنل دیگری خرید را انجام دهید.", $backuser, 'html');
+        step("home", $from_id);
+        return;
+    }
+    $snapshot = fixedPlanBuildSnapshot($plan);
+    if (!$snapshot['valid']) {
+        sendmessage($from_id, "❌ قیمت نهایی این پلن معتبر نیست.", $keyboard, 'HTML');
+        step('home', $from_id);
+        return;
+    }
+    $priceproduct = intval($snapshot['plan_final_price']);
+    $username_ac = strtolower((string) $user['Processing_value_tow']);
+    $DataUserOut = $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_ac);
+    if (isset($DataUserOut['username']) || recordExists('invoice', 'username', $username_ac)) {
+        sendmessage($from_id, "❌ لطفا مراحل خرید را مجددا انجام دهید", null, 'HTML');
+        step('home', $from_id);
+        return;
+    }
+    $date = time();
+    $randomString = bin2hex(random_bytes(4));
+    if (recordExists('invoice', 'id_invoice', $randomString)) {
+        $randomString = rand(1000000, 9999999) . $randomString;
+    }
+    $notifctions = json_encode(array(
+        'volume' => false,
+        'time' => false,
+    ));
+    $stmt = $pdo->prepare("INSERT IGNORE INTO invoice (id_user, id_invoice, username, time_sell, Service_location, name_product, price_product, Volume, Service_time, Status, note, refral, notifctions, plan_id, plan_title, plan_volume_gb, plan_duration_days, plan_original_price, plan_discount_percent, plan_final_price) VALUES (:id_user, :id_invoice, :username, :time_sell, :service_location, :name_product, :price_product, :volume, :service_time, :status, :note, :refral, :notifctions, :plan_id, :plan_title, :plan_volume_gb, :plan_duration_days, :plan_original_price, :plan_discount_percent, :plan_final_price)");
+    $stmt->execute([
+        ':id_user' => $from_id,
+        ':id_invoice' => $randomString,
+        ':username' => $username_ac,
+        ':time_sell' => $date,
+        ':service_location' => $marzban_list_get['name_panel'],
+        ':name_product' => $snapshot['plan_title'],
+        ':price_product' => $priceproduct,
+        ':volume' => $snapshot['plan_volume_gb'],
+        ':service_time' => $snapshot['plan_duration_days'],
+        ':status' => 'unpaid',
+        ':note' => $userdate['nameconfig'] ?? '',
+        ':refral' => $user['affiliates'],
+        ':notifctions' => $notifctions,
+        ':plan_id' => $snapshot['plan_id'],
+        ':plan_title' => $snapshot['plan_title'],
+        ':plan_volume_gb' => $snapshot['plan_volume_gb'],
+        ':plan_duration_days' => $snapshot['plan_duration_days'],
+        ':plan_original_price' => $snapshot['plan_original_price'],
+        ':plan_discount_percent' => $snapshot['plan_discount_percent'],
+        ':plan_final_price' => $snapshot['plan_final_price'],
+    ]);
+    if ($priceproduct > $user['Balance'] && $user['agent'] != "n2" && $priceproduct != 0) {
+        $marzbandirectpay = select("shopSetting", "*", "Namevalue", "statusdirectpabuy", "select")['value'];
+        $Balance_prim = $priceproduct - $user['Balance'];
+        if ($Balance_prim <= 1) {
+            $Balance_prim = 0;
+        }
+        if ($marzbandirectpay == "offdirectbuy") {
+            $minbalance = number_format(json_decode(select("PaySetting", "*", "NamePay", "minbalance", "select")['ValuePay'], true)[$user['agent']]);
+            $maxbalance = number_format(json_decode(select("PaySetting", "*", "NamePay", "maxbalance", "select")['ValuePay'], true)[$user['agent']]);
+            $bakinfos = json_encode([
+                'inline_keyboard' => [
+                    [['text' => $textbotlang['users']['stateus']['backinfo'], 'callback_data' => "account"]]
+                ]
+            ]);
+            Editmessagetext($from_id, $message_id, sprintf($textbotlang['users']['Balance']['insufficientbalance'], $minbalance, $maxbalance), $bakinfos, 'HTML');
+            step('getprice', $from_id);
+        } else {
+            update("user", "Processing_value", $Balance_prim, "id", $from_id);
+            sendmessage($from_id, $textbotlang['users']['sell']['None-credit'], $step_payment, 'HTML');
+            step('get_step_payment', $from_id);
+            update("user", "Processing_value_one", $username_ac, "id", $from_id);
+            update("user", "Processing_value_tow", "getconfigafterpay", "id", $from_id);
+        }
+        return;
+    }
+    if (intval($user['maxbuyagent']) != 0 && $user['agent'] == "n2" && intval($user['Balance'] - $priceproduct) < intval("-" . $user['maxbuyagent'])) {
+        sendmessage($from_id, $textbotlang['users']['Balance']['maxpurchasereached'], null, 'HTML');
+        return;
+    }
+    Editmessagetext($from_id, $message_id, "♻️ در حال ساختن سرویس شما...", null);
+    $datetimestep = $snapshot['plan_duration_days'] == 0 ? 0 : strtotime(date("Y-m-d H:i:s", strtotime("+" . intval($snapshot['plan_duration_days']) . "days")));
+    $datac = array(
+        'expire' => $datetimestep,
+        'data_limit' => intval($snapshot['plan_volume_gb']) * pow(1024, 3),
+        'from_id' => $from_id,
+        'username' => $username,
+        'type' => 'buy',
+        'fixed_plan' => $snapshot,
+    );
+    $dataoutput = $ManagePanel->createUser($marzban_list_get['name_panel'], 'fixed_plan', $username_ac, $datac);
+    if (!isset($dataoutput['username']) || $dataoutput['username'] === null || $dataoutput['username'] === '') {
+        $errorMessage = is_array($dataoutput['msg'] ?? null) ? json_encode($dataoutput['msg'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : (string) ($dataoutput['msg'] ?? 'unknown error');
+        sendmessage($from_id, $textbotlang['users']['sell']['ErrorConfig'], $keyboard, 'HTML');
+        if (strlen($setting['Channel_Report']) > 0) {
+            telegram('sendmessage', [
+                'chat_id' => $setting['Channel_Report'],
+                'message_thread_id' => $errorreport,
+                'text' => "⭕️ خطای ساخت اشتراک\n✍️ دلیل خطا :\n{$errorMessage}\nآیدی کابر : $from_id\nنام کاربری کاربر : @$username\nنام پنل : {$marzban_list_get['name_panel']}",
+                'parse_mode' => "HTML"
+            ]);
+        }
+        step('home', $from_id);
+        return;
+    }
+    update("invoice", "Status", "active", "username", $username_ac);
+    $output_config_link = $marzban_list_get['sublink'] == "onsublink" ? $dataoutput['subscription_url'] : "";
+    $config = "";
+    if ($marzban_list_get['config'] == "onconfig" && is_array($dataoutput['configs'])) {
+        foreach ($dataoutput['configs'] as $link) {
+            $config .= "\n" . $link;
+        }
+    }
+    $Shoppinginfo = json_encode(['inline_keyboard' => [[['text' => $textbotlang['users']['help']['btninlinebuy'], 'callback_data' => "helpbtn"]]]], JSON_UNESCAPED_UNICODE);
+    $textcreatuser = str_replace('{username}', "<code>{$dataoutput['username']}</code>", $datatextbot['textafterpay']);
+    $textcreatuser = str_replace('{name_service}', $snapshot['plan_title'], $textcreatuser);
+    $textcreatuser = str_replace('{location}', $marzban_list_get['name_panel'], $textcreatuser);
+    $textcreatuser = str_replace('{day}', $snapshot['plan_duration_days'], $textcreatuser);
+    $textcreatuser = str_replace('{volume}', $snapshot['plan_volume_gb'], $textcreatuser);
+    $textcreatuser = str_replace('{config}', "<code>{$output_config_link}</code>", $textcreatuser);
+    $textcreatuser = str_replace('{links}', $config, $textcreatuser);
+    $textcreatuser = str_replace('{links2}', $output_config_link, $textcreatuser);
+    $textcreatuser .= "\n💰 مبلغ پرداختی: " . number_format($priceproduct, 0) . " تومان";
+    sendMessageService($marzban_list_get, $dataoutput['configs'], $output_config_link, $dataoutput['username'], $Shoppinginfo, $textcreatuser, $randomString);
+    sendmessage($from_id, $textbotlang['users']['selectoption'], $keyboard, 'HTML');
+    if ($priceproduct != 0) {
+        update("user", "Balance", $user['Balance'] - $priceproduct, "id", $from_id);
+    }
+    step('home', $from_id);
 } elseif ($user['step'] == "payment" && $datain == "confirmandgetservice" || $datain == "confirmandgetserviceDiscount") {
     $userdate = json_decode($user['Processing_value'], true);
     Editmessagetext($from_id, $message_id, $text_inline, json_encode(['inline_keyboard' => []]));

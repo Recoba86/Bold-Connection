@@ -41,7 +41,9 @@ class ManagePanel
         } else {
             $inoice = false;
         }
-        if (!in_array($code_product, ["usertest", "🛍 حجم دلخواه", "customvolume"])) {
+        if ($code_product === 'fixed_plan' && isset($Data_Config['fixed_plan']) && is_array($Data_Config['fixed_plan'])) {
+            $Get_Data_Product = fixedPlanProductFromSnapshot($Data_Config['fixed_plan']);
+        } elseif (!in_array($code_product, ["usertest", "🛍 حجم دلخواه", "customvolume"])) {
 
             $stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = :name_panel OR Location = '/all')  AND code_product = :code_product");
             $stmt->bindParam(':name_panel', $name_panel);

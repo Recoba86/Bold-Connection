@@ -1,6 +1,7 @@
 <?php
 require_once 'vendor/autoload.php';
 require_once 'config.php';
+require_once __DIR__ . '/fixed_plans.php';
 ini_set('error_log', 'error_log');
 
 /**
@@ -1158,12 +1159,9 @@ function DirectPayment($order_id, $image = 'images.jpg')
     update("user", "Processing_value_four", "0", "id", $Balance_id['id']);
     if ($steppay[0] == "getconfigafterpay") {
         $get_invoice = select("invoice", "*", "username", $steppay[1], "select");
-        $stmt = $pdo->prepare("SELECT * FROM product WHERE name_product = :name_product AND (Location = :Service_location  or Location = '/all')");
-        $stmt->bindParam(':name_product', $get_invoice['name_product'], PDO::PARAM_STR);
-        $stmt->bindParam(':Service_location', $get_invoice['Service_location'], PDO::PARAM_STR);
-        $stmt->execute();
-        $info_product = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($get_invoice['name_product'] == "🛍 حجم دلخواه" || $get_invoice['name_product'] == "⚙️ سرویس دلخواه") {
+        if (!empty($get_invoice['plan_id'])) {
+            $info_product = fixedPlanProductFromInvoice($get_invoice);
+        } elseif ($get_invoice['name_product'] == "🛍 حجم دلخواه" || $get_invoice['name_product'] == "⚙️ سرویس دلخواه") {
             $info_product['data_limit_reset'] = "no_reset";
             $info_product['Volume_constraint'] = $get_invoice['Volume'];
             $info_product['name_product'] = $textbotlang['users']['customsellvolume']['title'];
@@ -1192,6 +1190,17 @@ function DirectPayment($order_id, $image = 'images.jpg')
             'username' => $Balance_id['username'],
             'type' => 'buy'
         );
+        if (!empty($get_invoice['plan_id'])) {
+            $datac['fixed_plan'] = [
+                'plan_id' => intval($get_invoice['plan_id']),
+                'plan_title' => $get_invoice['plan_title'],
+                'plan_volume_gb' => intval($get_invoice['plan_volume_gb']),
+                'plan_duration_days' => intval($get_invoice['plan_duration_days']),
+                'plan_original_price' => intval($get_invoice['plan_original_price']),
+                'plan_discount_percent' => intval($get_invoice['plan_discount_percent']),
+                'plan_final_price' => intval($get_invoice['plan_final_price']),
+            ];
+        }
         $dataoutput = $ManagePanel->createUser($marzban_list_get['name_panel'], $info_product['code_product'], $username_ac, $datac);
         if ($dataoutput['username'] == null) {
             $dataoutput['msg'] = json_encode($dataoutput['msg']);
@@ -1246,6 +1255,9 @@ function DirectPayment($order_id, $image = 'images.jpg')
         $textcreatuser = str_replace('{config}', "<code>{$output_config_link}</code>", $textcreatuser);
         $textcreatuser = str_replace('{links}', $config, $textcreatuser);
         $textcreatuser = str_replace('{links2}', "{$output_config_link}", $textcreatuser);
+        if (!empty($get_invoice['plan_id'])) {
+            $textcreatuser .= "\n💰 مبلغ پرداختی: " . number_format((float) $get_invoice['price_product'], 0) . " تومان";
+        }
         if ($marzban_list_get['type'] == "Manualsale" || $marzban_list_get['type'] == "ibsng" || $marzban_list_get['type'] == "mikrotik") {
             $textcreatuser = str_replace('{password}', $dataoutput['subscription_url'], $textcreatuser);
             update("invoice", "user_info", $dataoutput['subscription_url'], "id_invoice", $get_invoice['id_invoice']);

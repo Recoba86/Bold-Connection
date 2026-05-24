@@ -553,6 +553,13 @@ try {
         panel_sub_id varchar(255) NULL,
         panel_inbound_ids TEXT NULL,
         panel_client_key TEXT NULL,
+        plan_id INT NULL,
+        plan_title varchar(255) NULL,
+        plan_volume_gb INT NULL,
+        plan_duration_days INT NULL,
+        plan_original_price BIGINT NULL,
+        plan_discount_percent INT NULL,
+        plan_final_price BIGINT NULL,
         note varchar(500) NULL,
         user_info TEXT NULL,
         bottype varchar(200) NULL,
@@ -603,10 +610,59 @@ try {
         addFieldToTable("invoice", "panel_sub_id", null, "VARCHAR(255)");
         addFieldToTable("invoice", "panel_inbound_ids", null, "TEXT");
         addFieldToTable("invoice", "panel_client_key", null, "TEXT");
+        addFieldToTable("invoice", "plan_id", null, "INT");
+        addFieldToTable("invoice", "plan_title", null, "VARCHAR(255)");
+        addFieldToTable("invoice", "plan_volume_gb", null, "INT");
+        addFieldToTable("invoice", "plan_duration_days", null, "INT");
+        addFieldToTable("invoice", "plan_original_price", null, "BIGINT");
+        addFieldToTable("invoice", "plan_discount_percent", null, "INT");
+        addFieldToTable("invoice", "plan_final_price", null, "BIGINT");
         $Check_filde = $pdo->query("SHOW COLUMNS FROM invoice LIKE 'Status'");
         if ($Check_filde->rowCount() != 1) {
             $result = $pdo->query("ALTER TABLE invoice ADD Status VARCHAR(100)");
         }
+    }
+} catch (PDOException $e) {
+    error_log('table.php migration error: ' . $e->getMessage());
+}
+//-----------------------------------------------------------------
+try {
+    $result = $pdo->query("SHOW TABLES LIKE 'service_plans'");
+    $table_exists = ($result->rowCount() > 0);
+
+    if (!$table_exists) {
+        $pdo->query("CREATE TABLE service_plans (
+        id INT(10) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        title varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+        volume_gb INT NOT NULL,
+        duration_days INT NOT NULL,
+        price BIGINT NOT NULL,
+        description TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
+        code_panel varchar(200) NOT NULL DEFAULT '/all',
+        agent varchar(20) NOT NULL DEFAULT 'all',
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        is_archived TINYINT(1) NOT NULL DEFAULT 0,
+        allow_free TINYINT(1) NOT NULL DEFAULT 0,
+        created_at INT NULL,
+        updated_at INT NULL,
+        KEY idx_service_plans_target (code_panel, agent, is_active, is_archived),
+        KEY idx_service_plans_sort (sort_order, id))
+        ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci");
+    } else {
+        addFieldToTable("service_plans", "title", null, "VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+        addFieldToTable("service_plans", "volume_gb", "0", "INT");
+        addFieldToTable("service_plans", "duration_days", "0", "INT");
+        addFieldToTable("service_plans", "price", "0", "BIGINT");
+        addFieldToTable("service_plans", "description", null, "TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+        addFieldToTable("service_plans", "code_panel", "/all", "VARCHAR(200)");
+        addFieldToTable("service_plans", "agent", "all", "VARCHAR(20)");
+        addFieldToTable("service_plans", "sort_order", "0", "INT");
+        addFieldToTable("service_plans", "is_active", "1", "TINYINT(1)");
+        addFieldToTable("service_plans", "is_archived", "0", "TINYINT(1)");
+        addFieldToTable("service_plans", "allow_free", "0", "TINYINT(1)");
+        addFieldToTable("service_plans", "created_at", null, "INT");
+        addFieldToTable("service_plans", "updated_at", null, "INT");
     }
 } catch (PDOException $e) {
     error_log('table.php migration error: ' . $e->getMessage());
@@ -1162,6 +1218,11 @@ try {
         $pdo->query("INSERT INTO shopSetting (Namevalue,value) VALUES ('configshow','onconfig')");
         $pdo->query("INSERT INTO shopSetting (Namevalue,value) VALUES ('backserviecstatus','on')");
         $pdo->query("INSERT INTO shopSetting (Namevalue,value) VALUES ('chashbackextend','0')");
+        $pdo->query("INSERT INTO shopSetting (Namevalue,value) VALUES ('sales_mode','custom_pricing')");
+        $pdo->query("INSERT INTO shopSetting (Namevalue,value) VALUES ('fixed_discount_enabled','0')");
+        $pdo->query("INSERT INTO shopSetting (Namevalue,value) VALUES ('fixed_discount_percent','0')");
+        $pdo->query("INSERT INTO shopSetting (Namevalue,value) VALUES ('fixed_discount_start_at','0')");
+        $pdo->query("INSERT INTO shopSetting (Namevalue,value) VALUES ('fixed_discount_end_at','0')");
         $stmt = $pdo->prepare("INSERT INTO shopSetting (Namevalue, value) VALUES (:namevalue, :value)");
         $stmt->execute([
             ':namevalue' => 'chashbackextend_agent',
@@ -1184,6 +1245,11 @@ try {
         $pdo->query("INSERT IGNORE INTO shopSetting (Namevalue,value) VALUES ('configshow','onconfig')");
         $pdo->query("INSERT IGNORE INTO shopSetting (Namevalue,value) VALUES ('backserviecstatus','on')");
         $pdo->query("INSERT IGNORE INTO shopSetting (Namevalue,value) VALUES ('chashbackextend','0')");
+        $pdo->query("INSERT IGNORE INTO shopSetting (Namevalue,value) VALUES ('sales_mode','custom_pricing')");
+        $pdo->query("INSERT IGNORE INTO shopSetting (Namevalue,value) VALUES ('fixed_discount_enabled','0')");
+        $pdo->query("INSERT IGNORE INTO shopSetting (Namevalue,value) VALUES ('fixed_discount_percent','0')");
+        $pdo->query("INSERT IGNORE INTO shopSetting (Namevalue,value) VALUES ('fixed_discount_start_at','0')");
+        $pdo->query("INSERT IGNORE INTO shopSetting (Namevalue,value) VALUES ('fixed_discount_end_at','0')");
         $stmt = $pdo->prepare("INSERT IGNORE INTO shopSetting (Namevalue, value) VALUES (:namevalue, :value)");
         $stmt->execute([
             ':namevalue' => 'chashbackextend_agent',

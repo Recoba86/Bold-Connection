@@ -389,17 +389,36 @@ $keyboardhelpadmin = json_encode([
     ],
     'resize_keyboard' => true
 ]);
+$salesModeForKeyboard = function_exists('fixedPlanSalesMode') ? fixedPlanSalesMode() : 'custom_pricing';
+$shopKeyboardRows = [
+    [['text' => "🧭 حالت فروش"]],
+    [['text' => "🛒 وضعیت قابلیت های فروشگاه"]],
+];
+if ($salesModeForKeyboard === 'fixed_plans') {
+    $shopKeyboardRows[] = [['text' => "📦 مدیریت پلن ثابت"], ['text' => "🎯 تخفیف پلن ثابت"]];
+    $shopKeyboardRows[] = [['text' => "⚙️ تنظیمات پیشرفته فروشگاه"]];
+} else {
+    $shopKeyboardRows[] = [['text' => "🗂 مدیریت دسته بندی"], ['text' => "🛍 مدیریت محصولات"]];
+    $shopKeyboardRows[] = [['text' => "🎁 ساخت کد هدیه"], ['text' => "❌ حذف کد هدیه"]];
+    $shopKeyboardRows[] = [['text' => "🎁 ساخت کد تخفیف"], ['text' => "❌ حذف کد تخفیف"]];
+    $shopKeyboardRows[] = [['text' => "⬇️ حداقل موجودی خرید عمده"], ['text' => "🎁 کش بک تمدید"]];
+    $shopKeyboardRows[] = [['text' => "⚙️ تنظیمات پیشرفته فروشگاه"]];
+}
+$shopKeyboardRows[] = [['text' => $textbotlang['Admin']['backadmin']], ['text' => $textbotlang['Admin']['backmenu']]];
 $shopkeyboard = json_encode([
+    'keyboard' => $shopKeyboardRows,
+    'resize_keyboard' => true
+], JSON_UNESCAPED_UNICODE);
+$shopAdvancedKeyboard = json_encode([
     'keyboard' => [
-        [['text' => "🛒 وضعیت قابلیت های فروشگاه"]],
         [['text' => "🗂 مدیریت دسته بندی"], ['text' => "🛍 مدیریت محصولات"]],
         [['text' => "🎁 ساخت کد هدیه"], ['text' => "❌ حذف کد هدیه"]],
         [['text' => "🎁 ساخت کد تخفیف"], ['text' => "❌ حذف کد تخفیف"]],
         [['text' => "⬇️ حداقل موجودی خرید عمده"], ['text' => "🎁 کش بک تمدید"]],
-        [['text' => $textbotlang['Admin']['backadmin']], ['text' => $textbotlang['Admin']['backmenu']]]
+        [['text' => "⬅️ بازگشت به منوی فروشگاه"]],
     ],
     'resize_keyboard' => true
-]);
+], JSON_UNESCAPED_UNICODE);
 $keyboard_Category_manage = json_encode([
     'keyboard' => [
         [['text' => "🛒 اضافه کردن دسته بندی"], ['text' => "❌ حذف دسته بندی"]],

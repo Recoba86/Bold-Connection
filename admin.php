@@ -3273,6 +3273,215 @@ $caption";
     step('home', $from_id);
 } elseif ($text == "🏬 تنظیمات فروشگاه" && $adminrulecheck['rule'] == "administrator") {
     sendmessage($from_id, $textbotlang['users']['selectoption'], $shopkeyboard, 'HTML');
+} elseif ($text == "⚙️ تنظیمات پیشرفته فروشگاه" && $adminrulecheck['rule'] == "administrator") {
+    sendmessage($from_id, "Advanced shop settings", $shopAdvancedKeyboard, 'HTML');
+} elseif ($text == "⬅️ بازگشت به منوی فروشگاه" && $adminrulecheck['rule'] == "administrator") {
+    sendmessage($from_id, $textbotlang['users']['selectoption'], $shopkeyboard, 'HTML');
+} elseif ($text == "🧭 حالت فروش" && $adminrulecheck['rule'] == "administrator") {
+    $mode = fixedPlanSalesMode();
+    $modeText = $mode === 'fixed_plans' ? 'Fixed Plans' : 'Custom Pricing';
+    $keyboardSalesMode = json_encode([
+        'inline_keyboard' => [
+            [
+                ['text' => 'Fixed Plans', 'callback_data' => 'salesmode_fixed_plans'],
+                ['text' => 'Custom Pricing', 'callback_data' => 'salesmode_custom_pricing'],
+            ],
+        ],
+    ], JSON_UNESCAPED_UNICODE);
+    sendmessage($from_id, "Current sales mode: {$modeText}", $keyboardSalesMode, 'HTML');
+} elseif (preg_match('/^salesmode_(fixed_plans|custom_pricing)$/', $datain, $dataget) && $adminrulecheck['rule'] == "administrator") {
+    fixedPlanSetShopSetting('sales_mode', $dataget[1]);
+    $modeText = $dataget[1] === 'fixed_plans' ? 'Fixed Plans' : 'Custom Pricing';
+    Editmessagetext($from_id, $message_id, "✅ Sales mode changed to {$modeText}", json_encode(['inline_keyboard' => []]));
+} elseif (($text == "📦 مدیریت پلن ثابت" || $datain == "fixedplans_manage") && $adminrulecheck['rule'] == "administrator") {
+    if ($datain == "fixedplans_manage") {
+        Editmessagetext($from_id, $message_id, fixedPlanAdminDashboardText(), fixedPlanAdminKeyboard());
+    } else {
+        sendmessage($from_id, fixedPlanAdminDashboardText(), fixedPlanAdminKeyboard(), 'HTML');
+    }
+} elseif ($datain == "fixedplan_shop_back" && $adminrulecheck['rule'] == "administrator") {
+    Editmessagetext($from_id, $message_id, $textbotlang['users']['selectoption'], json_encode(['inline_keyboard' => []]));
+    sendmessage($from_id, $textbotlang['users']['selectoption'], $shopkeyboard, 'HTML');
+} elseif ($datain == "fixedplan_add" && $adminrulecheck['rule'] == "administrator") {
+    sendmessage($from_id, "Send plan as:\n<code>Title | GB | Days | Price | panel_code or /all | agent(all/f/n/n2) | sort_order | allow_free(0/1) | description</code>", $backadmin, 'HTML');
+    step('fixedplan_add_value', $from_id);
+} elseif ($user['step'] == "fixedplan_add_value" && $adminrulecheck['rule'] == "administrator") {
+    $parts = array_map('trim', explode('|', $text, 9));
+    if (count($parts) < 8) {
+        sendmessage($from_id, "❌ Invalid format. Use all required fields.", $backadmin, 'HTML');
+        return;
+    }
+    [$title, $volume, $days, $price, $codePanel, $agent, $sortOrder, $allowFree] = $parts;
+    $description = $parts[8] ?? '';
+    if ($title === '' || !ctype_digit($volume) || !ctype_digit($days) || !ctype_digit($price) || !ctype_digit($sortOrder) || !in_array($agent, ['all', 'f', 'n', 'n2'], true) || !in_array($allowFree, ['0', '1'], true)) {
+        sendmessage($from_id, "❌ Invalid plan values.", $backadmin, 'HTML');
+        return;
+    }
+    if ($codePanel !== '/all' && select('marzban_panel', '*', 'code_panel', $codePanel, 'count') == 0) {
+        sendmessage($from_id, "❌ Panel code not found.", $backadmin, 'HTML');
+        return;
+    }
+    $pricing = fixedPlanCalculatePrice($price, $allowFree === '1');
+    if (!$pricing['valid']) {
+        sendmessage($from_id, "❌ Zero final price requires allow_free=1.", $backadmin, 'HTML');
+        return;
+    }
+    $now = time();
+    $stmt = $pdo->prepare("INSERT INTO service_plans (title, volume_gb, duration_days, price, description, code_panel, agent, sort_order, is_active, is_archived, allow_free, created_at, updated_at) VALUES (:title, :volume_gb, :duration_days, :price, :description, :code_panel, :agent, :sort_order, 1, 0, :allow_free, :created_at, :updated_at)");
+    $stmt->execute([
+        ':title' => $title,
+        ':volume_gb' => intval($volume),
+        ':duration_days' => intval($days),
+        ':price' => intval($price),
+        ':description' => $description,
+        ':code_panel' => $codePanel,
+        ':agent' => $agent,
+        ':sort_order' => intval($sortOrder),
+        ':allow_free' => intval($allowFree),
+        ':created_at' => $now,
+        ':updated_at' => $now,
+    ]);
+    sendmessage($from_id, "✅ Fixed plan created.", fixedPlanAdminKeyboard(), 'HTML');
+    step('home', $from_id);
+} elseif (preg_match('/^fixedplan_view_(\d+)$/', $datain, $dataget) && $adminrulecheck['rule'] == "administrator") {
+    $plan = fixedPlanGetById($dataget[1]);
+    if (!$plan) {
+        Editmessagetext($from_id, $message_id, "❌ Plan not found.", fixedPlanAdminKeyboard());
+        return;
+    }
+    Editmessagetext($from_id, $message_id, fixedPlanAdminPlanText($plan), fixedPlanAdminPlanKeyboard($plan['id']));
+} elseif (preg_match('/^fixedplan_toggle_(active|free)_(\d+)$/', $datain, $dataget) && $adminrulecheck['rule'] == "administrator") {
+    $field = $dataget[1] === 'active' ? 'is_active' : 'allow_free';
+    $plan = fixedPlanGetById($dataget[2]);
+    if (!$plan) {
+        return;
+    }
+    $newValue = intval($plan[$field]) === 1 ? 0 : 1;
+    if ($field === 'allow_free' && $newValue === 0) {
+        $candidate = $plan;
+        $candidate['allow_free'] = 0;
+        if (!fixedPlanBuildSnapshot($candidate)['valid']) {
+            telegram('answerCallbackQuery', array(
+                'callback_query_id' => $callback_query_id,
+                'text' => 'This plan has zero final price. Increase price before disabling free plans.',
+                'show_alert' => true,
+                'cache_time' => 5,
+            ));
+            return;
+        }
+    }
+    $stmt = $pdo->prepare("UPDATE service_plans SET {$field} = :value, updated_at = :updated_at WHERE id = :id");
+    $stmt->execute([':value' => $newValue, ':updated_at' => time(), ':id' => intval($plan['id'])]);
+    $plan = fixedPlanGetById($plan['id']);
+    Editmessagetext($from_id, $message_id, fixedPlanAdminPlanText($plan), fixedPlanAdminPlanKeyboard($plan['id']));
+} elseif (preg_match('/^fixedplan_move_(up|down)_(\d+)$/', $datain, $dataget) && $adminrulecheck['rule'] == "administrator") {
+    $plan = fixedPlanGetById($dataget[2]);
+    if (!$plan) {
+        return;
+    }
+    $delta = $dataget[1] === 'up' ? -1 : 1;
+    $stmt = $pdo->prepare("UPDATE service_plans SET sort_order = :sort_order, updated_at = :updated_at WHERE id = :id");
+    $stmt->execute([':sort_order' => intval($plan['sort_order']) + $delta, ':updated_at' => time(), ':id' => intval($plan['id'])]);
+    $plan = fixedPlanGetById($plan['id']);
+    Editmessagetext($from_id, $message_id, fixedPlanAdminPlanText($plan), fixedPlanAdminPlanKeyboard($plan['id']));
+} elseif (preg_match('/^fixedplan_archive_(\d+)$/', $datain, $dataget) && $adminrulecheck['rule'] == "administrator") {
+    $planId = intval($dataget[1]);
+    $invoiceCount = select('invoice', '*', 'plan_id', $planId, 'count');
+    if ($invoiceCount > 0) {
+        $stmt = $pdo->prepare("UPDATE service_plans SET is_archived = 1, is_active = 0, updated_at = :updated_at WHERE id = :id");
+        $stmt->execute([':updated_at' => time(), ':id' => $planId]);
+        Editmessagetext($from_id, $message_id, "✅ Plan archived because invoices reference it.", fixedPlanAdminKeyboard());
+    } else {
+        $stmt = $pdo->prepare("DELETE FROM service_plans WHERE id = :id");
+        $stmt->execute([':id' => $planId]);
+        Editmessagetext($from_id, $message_id, "✅ Unused plan deleted.", fixedPlanAdminKeyboard());
+    }
+} elseif (preg_match('/^fixedplan_edit_([a-z_]+)_(\d+)$/', $datain, $dataget) && $adminrulecheck['rule'] == "administrator") {
+    $field = $dataget[1];
+    $allowedFields = ['title', 'price', 'volume_gb', 'duration_days', 'code_panel', 'agent', 'description', 'sort_order'];
+    if (!in_array($field, $allowedFields, true)) {
+        return;
+    }
+    update('user', 'Processing_value', json_encode(['plan_id' => intval($dataget[2]), 'field' => $field]), 'id', $from_id);
+    sendmessage($from_id, "Send new value for {$field}", $backadmin, 'HTML');
+    step('fixedplan_edit_value', $from_id);
+} elseif ($user['step'] == "fixedplan_edit_value" && $adminrulecheck['rule'] == "administrator") {
+    $payload = json_decode($user['Processing_value'], true);
+    $field = $payload['field'] ?? '';
+    $planId = intval($payload['plan_id'] ?? 0);
+    $allowedFields = ['title', 'price', 'volume_gb', 'duration_days', 'code_panel', 'agent', 'description', 'sort_order'];
+    if (!in_array($field, $allowedFields, true) || !$planId) {
+        sendmessage($from_id, "❌ Invalid edit state.", $shopkeyboard, 'HTML');
+        step('home', $from_id);
+        return;
+    }
+    $value = trim((string) $text);
+    if (in_array($field, ['price', 'volume_gb', 'duration_days', 'sort_order'], true) && !ctype_digit($value)) {
+        sendmessage($from_id, "❌ Value must be a non-negative integer.", $backadmin, 'HTML');
+        return;
+    }
+    if ($field === 'agent' && !in_array($value, ['all', 'f', 'n', 'n2'], true)) {
+        sendmessage($from_id, "❌ Agent must be all, f, n, or n2.", $backadmin, 'HTML');
+        return;
+    }
+    if ($field === 'code_panel' && $value !== '/all' && select('marzban_panel', '*', 'code_panel', $value, 'count') == 0) {
+        sendmessage($from_id, "❌ Panel code not found.", $backadmin, 'HTML');
+        return;
+    }
+    $candidate = fixedPlanGetById($planId);
+    if (!$candidate) {
+        sendmessage($from_id, "❌ Plan not found.", $shopkeyboard, 'HTML');
+        step('home', $from_id);
+        return;
+    }
+    $candidate[$field] = $value;
+    if (!fixedPlanBuildSnapshot($candidate)['valid']) {
+        sendmessage($from_id, "❌ Zero final price requires Allow free to be enabled first.", $backadmin, 'HTML');
+        return;
+    }
+    $stmt = $pdo->prepare("UPDATE service_plans SET {$field} = :value, updated_at = :updated_at WHERE id = :id");
+    $stmt->execute([':value' => $value, ':updated_at' => time(), ':id' => $planId]);
+    $plan = fixedPlanGetById($planId);
+    sendmessage($from_id, fixedPlanAdminPlanText($plan), fixedPlanAdminPlanKeyboard($planId), 'HTML');
+    step('home', $from_id);
+} elseif (($text == "🎯 تخفیف پلن ثابت" || $datain == "fixedplan_discount") && $adminrulecheck['rule'] == "administrator") {
+    $discount = fixedPlanDiscountSettings();
+    $enabled = $discount['enabled'] ? 'Enabled' : 'Disabled';
+    $active = $discount['active'] ? 'Active now' : 'Inactive now';
+    $textDiscount = "🎯 Fixed plan global discount\nStatus: {$enabled}\nPercent: {$discount['percent']}%\nStart: {$discount['start_at']}\nEnd: {$discount['end_at']}\n{$active}";
+    if ($datain == "fixedplan_discount") {
+        Editmessagetext($from_id, $message_id, $textDiscount, fixedPlanDiscountKeyboard());
+    } else {
+        sendmessage($from_id, $textDiscount, fixedPlanDiscountKeyboard(), 'HTML');
+    }
+} elseif ($datain == "fixeddiscount_toggle" && $adminrulecheck['rule'] == "administrator") {
+    $discount = fixedPlanDiscountSettings();
+    fixedPlanSetShopSetting('fixed_discount_enabled', $discount['enabled'] ? '0' : '1');
+    Editmessagetext($from_id, $message_id, "✅ Discount status changed.", fixedPlanDiscountKeyboard());
+} elseif (preg_match('/^fixeddiscount_set_(percent|start|end)$/', $datain, $dataget) && $adminrulecheck['rule'] == "administrator") {
+    update('user', 'Processing_value', $dataget[1], 'id', $from_id);
+    $hint = $dataget[1] === 'percent' ? 'Send percent from 0 to 95' : 'Send Unix timestamp or 0';
+    sendmessage($from_id, $hint, $backadmin, 'HTML');
+    step('fixeddiscount_set_value', $from_id);
+} elseif ($user['step'] == "fixeddiscount_set_value" && $adminrulecheck['rule'] == "administrator") {
+    $field = $user['Processing_value'];
+    if (!ctype_digit($text)) {
+        sendmessage($from_id, "❌ Value must be a non-negative integer.", $backadmin, 'HTML');
+        return;
+    }
+    if ($field === 'percent') {
+        if (intval($text) > 95) {
+            sendmessage($from_id, "❌ Maximum discount is 95%.", $backadmin, 'HTML');
+            return;
+        }
+        fixedPlanSetShopSetting('fixed_discount_percent', intval($text));
+    } elseif ($field === 'start') {
+        fixedPlanSetShopSetting('fixed_discount_start_at', intval($text));
+    } elseif ($field === 'end') {
+        fixedPlanSetShopSetting('fixed_discount_end_at', intval($text));
+    }
+    sendmessage($from_id, "✅ Discount setting saved.", fixedPlanDiscountKeyboard(), 'HTML');
+    step('home', $from_id);
 } elseif ($text == "🛍 اضافه کردن محصول" && $adminrulecheck['rule'] == "administrator") {
     $locationproduct = select("marzban_panel", "*", null, null, "count");
     if ($locationproduct == 0) {
