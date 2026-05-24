@@ -12,13 +12,11 @@ RESTART_SERVICES="${RESTART_SERVICES:-}"
 
 if [[ -t 1 ]]; then
     RED=$'\033[0;31m'
-    GREEN=$'\033[0;32m'
     YELLOW=$'\033[1;33m'
     BLUE=$'\033[0;34m'
     NC=$'\033[0m'
 else
     RED=''
-    GREEN=''
     YELLOW=''
     BLUE=''
     NC=''
@@ -80,7 +78,7 @@ restore_config_files() {
     fi
 
     while IFS= read -r -d '' file; do
-        local relative="${file#$BACKUP_DIR/}"
+        local relative="${file#"$BACKUP_DIR"/}"
         mkdir -p "$ROOT_DIR/$(dirname "$relative")"
         cp -p "$file" "$ROOT_DIR/$relative"
     done < <(find "$BACKUP_DIR" -type f -print0)
@@ -90,19 +88,16 @@ restore_config_files() {
 
 run_php_lint() {
     log "Running PHP syntax validation."
-    local output
-    set +e
-    output="$(find . -path './vendor' -prune -o -name '*.php' -exec php -l {} \; | grep -v 'No syntax errors detected')"
-    local status=$?
-    set -e
+    local lint_output
 
-    if [[ "$status" -eq 0 ]]; then
-        printf '%s\n' "$output"
+    lint_output="$(
+        find . -path './vendor' -prune -o -name '*.php' -exec php -l {} \; |
+            grep -v 'No syntax errors detected' || true
+    )"
+
+    if [[ -n "$lint_output" ]]; then
+        printf '%s\n' "$lint_output"
         fail "PHP syntax validation failed."
-    fi
-
-    if [[ "$status" -ne 1 ]]; then
-        fail "PHP syntax validation command failed."
     fi
 
     log "PHP syntax validation passed."
