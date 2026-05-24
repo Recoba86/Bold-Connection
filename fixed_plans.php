@@ -36,12 +36,15 @@ function fixedPlanSetShopSetting($name, $value)
 
 function fixedPlanSalesMode()
 {
-    return fixedPlanNormalizeSalesMode(fixedPlanGetShopSetting('sales_mode', 'custom_pricing'));
+    // Deprecated: the original product table is the primary fixed-plan system.
+    // Keep this helper stable for old snapshots/tests, but never route new users
+    // into the duplicate service_plans flow.
+    return 'custom_pricing';
 }
 
 function fixedPlanModeEnabled()
 {
-    return fixedPlanSalesMode() === 'fixed_plans';
+    return false;
 }
 
 function fixedPlanNormalizeDiscountSettings(array $settings, $now = null)

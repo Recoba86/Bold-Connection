@@ -14,6 +14,8 @@ function assertSameValue($expected, $actual, $message)
 
 assertSameValue('custom_pricing', fixedPlanNormalizeSalesMode('bad'), 'invalid sales mode falls back to custom pricing');
 assertSameValue('fixed_plans', fixedPlanNormalizeSalesMode('fixed_plans'), 'fixed plan sales mode is accepted');
+assertSameValue('custom_pricing', fixedPlanSalesMode(), 'duplicate service_plans mode is deprecated in favor of original products');
+assertSameValue(false, fixedPlanModeEnabled(), 'service_plans user flow is disabled');
 assertSameValue('&lt;b&gt;Plan&lt;/b&gt;', fixedPlanHtml('<b>Plan</b>'), 'fixed plan HTML output is escaped');
 
 $discount = fixedPlanNormalizeDiscountSettings([

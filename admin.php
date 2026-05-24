@@ -3277,6 +3277,15 @@ $caption";
     sendmessage($from_id, "Advanced shop settings", $shopAdvancedKeyboard, 'HTML');
 } elseif ($text == "⬅️ بازگشت به منوی فروشگاه" && $adminrulecheck['rule'] == "administrator") {
     sendmessage($from_id, $textbotlang['users']['selectoption'], $shopkeyboard, 'HTML');
+} elseif (($text == "🧭 حالت فروش" || $text == "📦 مدیریت پلن ثابت" || $text == "🎯 تخفیف پلن ثابت" || preg_match('/^(salesmode_|fixedplans_|fixedplan_|fixeddiscount_)/', (string) $datain) || in_array($user['step'], ['fixedplan_add_value', 'fixedplan_edit_value', 'fixeddiscount_set_value'], true)) && $adminrulecheck['rule'] == "administrator") {
+    fixedPlanSetShopSetting('sales_mode', 'custom_pricing');
+    $message = "ℹ️ The duplicate service_plans fixed-plan manager is deprecated. Use the original Persian product system from «🛍 مدیریت محصولات»; it remains the primary source for fixed GB, duration, and price plans.";
+    if (!empty($datain)) {
+        Editmessagetext($from_id, $message_id, $message, json_encode(['inline_keyboard' => []], JSON_UNESCAPED_UNICODE));
+    } else {
+        sendmessage($from_id, $message, $shopkeyboard, 'HTML');
+    }
+    step('home', $from_id);
 } elseif ($text == "🧭 حالت فروش" && $adminrulecheck['rule'] == "administrator") {
     $mode = fixedPlanSalesMode();
     $modeText = $mode === 'fixed_plans' ? 'Fixed Plans' : 'Custom Pricing';
