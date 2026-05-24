@@ -8,12 +8,12 @@ function xuiNormalizeNodeRow(array $node)
         'remote_id' => isset($node['id']) ? intval($node['id']) : 0,
         'name' => (string) ($node['name'] ?? ('node-' . ($node['id'] ?? ''))),
         'scheme' => (string) ($node['scheme'] ?? 'https'),
-        'host' => (string) ($node['host'] ?? ''),
+        'host' => (string) ($node['host'] ?? $node['address'] ?? ''),
         'port' => isset($node['port']) ? intval($node['port']) : 2053,
-        'base_path' => (string) ($node['basePath'] ?? $node['base_path'] ?? ''),
+        'base_path' => (string) ($node['basePath'] ?? $node['base_path'] ?? '/'),
         'status' => (string) ($node['status'] ?? 'unknown'),
-        'cpu' => isset($node['cpu']) ? (float) $node['cpu'] : null,
-        'mem' => isset($node['mem']) ? (float) $node['mem'] : null,
+        'cpu' => isset($node['cpu']) ? (float) $node['cpu'] : (isset($node['cpuPct']) ? (float) $node['cpuPct'] : null),
+        'mem' => isset($node['mem']) ? (float) $node['mem'] : (isset($node['memPct']) ? (float) $node['memPct'] : null),
     ];
 }
 
@@ -345,6 +345,13 @@ function xuiToggleNodeSale($codePanel, $remoteId)
 
 function xuiResolveBuyerConfigs(array $panel, $subId)
 {
+    if (function_exists('xuiFetchModernSubscriptionLinks')) {
+        $modernLinks = xuiFetchModernSubscriptionLinks($panel, $subId);
+        if (!empty($modernLinks)) {
+            return $modernLinks;
+        }
+    }
+
     if (($panel['panel_mode'] ?? 'single') !== 'cluster') {
         $links = xuiFetchSubscriptionLines(rtrim((string) $panel['linksubx'], '/') . '/' . $subId);
         return $links;

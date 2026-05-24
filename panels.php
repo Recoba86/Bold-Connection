@@ -162,11 +162,15 @@ class ManagePanel
                     'msg' => $data_Output['status']
                 );
             } else {
+                $xuiMeta = isset($data_Output['xui_meta']) && is_array($data_Output['xui_meta']) ? $data_Output['xui_meta'] : [];
                 $data_Output = json_decode($data_Output['body'], true);
                 if (!$data_Output['success']) {
                     $Output['status'] = 'Unsuccessful';
                     $Output['msg'] = $data_Output['msg'];
                 } else {
+                    if (!empty($xuiMeta)) {
+                        xuiStoreInvoicePanelMetadata($usernameC, $xuiMeta['subId'] ?? $subId, $xuiMeta['inboundIds'] ?? xuiParseInboundIds($inbounds), $xuiMeta['clientKey'] ?? null);
+                    }
                     $links_user = xuiResolveBuyerConfigs($Get_Data_Panel, $subId);
                     $Output['status'] = 'successful';
                     $Output['username'] = $usernameC;
@@ -558,6 +562,12 @@ class ManagePanel
                 );
             }
             $user_data = $user_data['obj'];
+            xuiStoreInvoicePanelMetadata(
+                $username,
+                $user_data['subId'] ?? null,
+                $user_data['inboundIds'] ?? (isset($user_data['inboundId']) ? [$user_data['inboundId']] : []),
+                $user_data['uuid'] ?? null
+            );
             $expire = $user_data['expiryTime'] / 1000;
             if ($user_data['enable']) {
                 $user_data['enable'] = "active";
@@ -928,12 +938,13 @@ class ManagePanel
             }
         } elseif ($Get_Data_Panel['type'] == "x-ui_single") {
             $subId = bin2hex(random_bytes(8));
+            $clientKey = generateUUID();
             $config = array(
                 'settings' => json_encode(
                     array(
                         'clients' => array(
                             array(
-                                "id" => generateUUID(),
+                                "id" => $clientKey,
                                 "enable" => true,
                                 "subId" => $subId,
                             )
@@ -948,6 +959,15 @@ class ManagePanel
                     'msg' => 'Unsuccessful'
                 );
             } else {
+                $clientData = get_clinets($username, $Get_Data_Panel['name_panel']);
+                $clientData = empty($clientData['body']) ? null : json_decode($clientData['body'], true);
+                $clientObj = is_array($clientData) && isset($clientData['obj']) && is_array($clientData['obj']) ? $clientData['obj'] : [];
+                xuiStoreInvoicePanelMetadata(
+                    $username,
+                    $subId,
+                    $clientObj['inboundIds'] ?? (isset($clientObj['inboundId']) ? [$clientObj['inboundId']] : []),
+                    $clientKey
+                );
                 $links_user = xuiResolveBuyerConfigs($Get_Data_Panel, $subId);
                 $Output = array(
                     'status' => 'successful',

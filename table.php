@@ -365,6 +365,8 @@ try {
         on_hold_test varchar(60) NOT NULL,
         version_panel varchar(60) NOT NULL,
         panel_mode varchar(20) NOT NULL DEFAULT 'single',
+        panel_capabilities TEXT NULL,
+        detected_panel_version varchar(60) NULL,
         nodes_synced_at varchar(20) NULL,
         node_balancer varchar(20) NOT NULL DEFAULT 'all',
         customvolume TEXT NULL,
@@ -418,6 +420,8 @@ try {
         addFieldToTable("marzban_panel", "datelogin", null, "TEXT");
         addFieldToTable("marzban_panel", "api_token", null, "TEXT");
         addFieldToTable("marzban_panel", "panel_mode", "single", "VARCHAR(20)");
+        addFieldToTable("marzban_panel", "panel_capabilities", null, "TEXT");
+        addFieldToTable("marzban_panel", "detected_panel_version", null, "VARCHAR(60)");
         addFieldToTable("marzban_panel", "nodes_synced_at", null, "VARCHAR(20)");
         addFieldToTable("marzban_panel", "node_balancer", "all", "VARCHAR(20)");
         addFieldToTable("marzban_panel", "val_usertest", "100", "VARCHAR(50)");
@@ -546,6 +550,9 @@ try {
         Volume varchar(200) NULL,
         Service_time varchar(200) NULL,
         uuid TEXT NULL,
+        panel_sub_id varchar(255) NULL,
+        panel_inbound_ids TEXT NULL,
+        panel_client_key TEXT NULL,
         note varchar(500) NULL,
         user_info TEXT NULL,
         bottype varchar(200) NULL,
@@ -593,6 +600,9 @@ try {
         if ($Check_filde->rowCount() != 1) {
             $result = $pdo->query("ALTER TABLE invoice ADD uuid TEXT");
         }
+        addFieldToTable("invoice", "panel_sub_id", null, "VARCHAR(255)");
+        addFieldToTable("invoice", "panel_inbound_ids", null, "TEXT");
+        addFieldToTable("invoice", "panel_client_key", null, "TEXT");
         $Check_filde = $pdo->query("SHOW COLUMNS FROM invoice LIKE 'Status'");
         if ($Check_filde->rowCount() != 1) {
             $result = $pdo->query("ALTER TABLE invoice ADD Status VARCHAR(100)");
