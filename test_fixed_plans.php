@@ -14,6 +14,7 @@ function assertSameValue($expected, $actual, $message)
 
 assertSameValue('custom_pricing', fixedPlanNormalizeSalesMode('bad'), 'invalid sales mode falls back to custom pricing');
 assertSameValue('fixed_plans', fixedPlanNormalizeSalesMode('fixed_plans'), 'fixed plan sales mode is accepted');
+assertSameValue('&lt;b&gt;Plan&lt;/b&gt;', fixedPlanHtml('<b>Plan</b>'), 'fixed plan HTML output is escaped');
 
 $discount = fixedPlanNormalizeDiscountSettings([
     'enabled' => '1',
@@ -83,5 +84,16 @@ assertSameValue('fixed_plan', $product['code_product'], 'fixed plan product conf
 assertSameValue(3, $product['Volume_constraint'], 'product config maps snapshot volume');
 assertSameValue(7, $product['Service_time'], 'product config maps snapshot duration');
 assertSameValue(108000, $product['price_product'], 'product config maps final price');
+
+$preview = fixedPlanInvoicePreviewText('user<&>', [
+    'plan_title' => '<b>Unsafe</b>',
+    'plan_volume_gb' => 1,
+    'plan_duration_days' => 1,
+    'plan_original_price' => 1000,
+    'plan_discount_percent' => 0,
+    'plan_final_price' => 1000,
+], 0);
+assertSameValue(false, strpos($preview, '<b>Unsafe</b>') !== false, 'invoice preview does not render raw plan HTML');
+assertSameValue(true, strpos($preview, '&lt;b&gt;Unsafe&lt;/b&gt;') !== false, 'invoice preview includes escaped plan title');
 
 echo "fixed plan tests passed\n";

@@ -76,6 +76,12 @@ function showFixedPlanInvoicePreview($planId, $requestedUsername = null)
 {
     global $from_id, $message_id, $username, $user, $textbotlang, $paymentom, $ManagePanel;
 
+    if (!fixedPlanModeEnabled()) {
+        sendmessage($from_id, "❌ خرید پلن ثابت در حال حاضر فعال نیست.", null, 'HTML');
+        step('home', $from_id);
+        return;
+    }
+
     $userdate = json_decode($user['Processing_value'], true);
     if (!is_array($userdate) || empty($userdate['name_panel'])) {
         sendmessage($from_id, "❌ مراحل خرید را مجددا از اول انجام دهید", null, 'HTML');
@@ -4259,6 +4265,11 @@ $textinvite
 } elseif ($user['step'] == "payment" && $datain == "confirmandgetservice" && strpos((string) $user['Processing_value_one'], 'fixedplan_') === 0) {
     $userdate = json_decode($user['Processing_value'], true);
     Editmessagetext($from_id, $message_id, $text_inline, json_encode(['inline_keyboard' => []]));
+    if (!fixedPlanModeEnabled()) {
+        sendmessage($from_id, "❌ خرید پلن ثابت در حال حاضر فعال نیست.", $keyboard, 'HTML');
+        step('home', $from_id);
+        return;
+    }
     if (!is_array($userdate) || empty($userdate['name_panel'])) {
         sendmessage($from_id, "❌ مراحل خرید را مجددا از اول انجام دهید", $keyboard, 'HTML');
         step('home', $from_id);
@@ -4387,7 +4398,7 @@ $textinvite
     }
     $Shoppinginfo = json_encode(['inline_keyboard' => [[['text' => $textbotlang['users']['help']['btninlinebuy'], 'callback_data' => "helpbtn"]]]], JSON_UNESCAPED_UNICODE);
     $textcreatuser = str_replace('{username}', "<code>{$dataoutput['username']}</code>", $datatextbot['textafterpay']);
-    $textcreatuser = str_replace('{name_service}', $snapshot['plan_title'], $textcreatuser);
+    $textcreatuser = str_replace('{name_service}', fixedPlanHtml($snapshot['plan_title']), $textcreatuser);
     $textcreatuser = str_replace('{location}', $marzban_list_get['name_panel'], $textcreatuser);
     $textcreatuser = str_replace('{day}', $snapshot['plan_duration_days'], $textcreatuser);
     $textcreatuser = str_replace('{volume}', $snapshot['plan_volume_gb'], $textcreatuser);

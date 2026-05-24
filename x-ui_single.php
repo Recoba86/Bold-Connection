@@ -40,9 +40,8 @@ function panel_login_cookie($code_panel)
 }
 function xui_apply_auth(CurlRequest $req, array $panel)
 {
-    $apiToken = xuiPanelApiToken($panel);
-    if ($apiToken !== null) {
-        $req->setBearerToken($apiToken);
+    if (xuiShouldUseModernClientApi($panel)) {
+        $req->setBearerToken(xuiPanelApiToken($panel));
         return false;
     }
 
@@ -594,7 +593,7 @@ function xuiFetchModernSubscriptionLinks(array $panel, $subId, $email = null)
 function login($code_panel, $verify = true)
 {
     $panel = select("marzban_panel", "*", "code_panel", $code_panel, "select");
-    if (xuiUsesBearerAuth($panel)) {
+    if (xuiShouldUseModernClientApi($panel)) {
         $url = $panel['url_panel'] . '/panel/api/inbounds/list';
         $req = new CurlRequest($url);
         $req->setHeaders(array(

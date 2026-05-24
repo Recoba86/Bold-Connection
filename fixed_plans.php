@@ -5,6 +5,11 @@ function fixedPlanNormalizeSalesMode($value)
     return $value === 'fixed_plans' ? 'fixed_plans' : 'custom_pricing';
 }
 
+function fixedPlanHtml($value)
+{
+    return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
+
 function fixedPlanGetShopSetting($name, $default = null)
 {
     $row = select('shopSetting', 'value', 'Namevalue', $name, 'select');
@@ -194,13 +199,15 @@ function fixedPlanInvoicePreviewText($username, array $snapshot, $balance)
     $original = number_format((float) $snapshot['plan_original_price'], 0);
     $final = number_format((float) $snapshot['plan_final_price'], 0);
     $balance = number_format((float) $balance, 0);
+    $safeUsername = fixedPlanHtml($username);
+    $safeTitle = fixedPlanHtml($snapshot['plan_title'] ?? '');
     $discountLine = intval($snapshot['plan_discount_percent']) > 0
         ? "\n💶 قیمت اصلی: <del>{$original} تومان</del>\n🎯 تخفیف: {$snapshot['plan_discount_percent']}%"
         : '';
 
     return "📇 پیش فاکتور شما:
-👤 نام کاربری: <code>{$username}</code>
-🔐 نام سرویس: {$snapshot['plan_title']}
+👤 نام کاربری: <code>{$safeUsername}</code>
+🔐 نام سرویس: {$safeTitle}
 📆 مدت اعتبار: {$snapshot['plan_duration_days']} روز
 👥 حجم اکانت: {$snapshot['plan_volume_gb']} گیگ{$discountLine}
 💶 قیمت نهایی: {$final} تومان
@@ -299,14 +306,16 @@ function fixedPlanAdminPlanText(array $plan)
     $snapshot = fixedPlanBuildSnapshot($plan);
     $status = intval($plan['is_active'] ?? 0) === 1 ? 'Active' : 'Inactive';
     $free = intval($plan['allow_free'] ?? 0) === 1 ? 'Allowed' : 'Blocked';
-    $target = ($plan['code_panel'] ?? '/all') . ' / ' . ($plan['agent'] ?? 'all');
+    $target = fixedPlanHtml(($plan['code_panel'] ?? '/all') . ' / ' . ($plan['agent'] ?? 'all'));
+    $title = fixedPlanHtml($plan['title'] ?? '');
+    $description = fixedPlanHtml($plan['description'] ?? '');
     $original = number_format((float) $snapshot['plan_original_price'], 0);
     $final = number_format((float) $snapshot['plan_final_price'], 0);
 
     return "📦 Fixed Plan
 
 ID: {$plan['id']}
-Title: {$plan['title']}
+Title: {$title}
 Target: {$target}
 Status: {$status}
 Volume: {$plan['volume_gb']} GB
@@ -316,7 +325,7 @@ Final price: {$final} Toman
 Discount: {$snapshot['plan_discount_percent']}%
 Free plan: {$free}
 Sort order: {$plan['sort_order']}
-Description: {$plan['description']}";
+Description: {$description}";
 }
 
 function fixedPlanAdminPlanKeyboard($planId)

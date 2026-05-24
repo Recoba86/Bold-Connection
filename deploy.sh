@@ -88,16 +88,28 @@ restore_config_files() {
 
 run_php_lint() {
     log "Running PHP syntax validation."
+    local lint_raw
     local lint_output
+    local lint_status
+
+    set +e
+    lint_raw="$(find . -path './vendor' -prune -o -name '*.php' -exec php -l {} \; 2>&1)"
+    lint_status=$?
+    set -e
 
     lint_output="$(
-        find . -path './vendor' -prune -o -name '*.php' -exec php -l {} \; |
+        printf '%s\n' "$lint_raw" |
             grep -v 'No syntax errors detected' || true
     )"
 
     if [[ -n "$lint_output" ]]; then
         printf '%s\n' "$lint_output"
         fail "PHP syntax validation failed."
+    fi
+
+    if [[ "$lint_status" -ne 0 ]]; then
+        printf '%s\n' "$lint_raw"
+        fail "PHP syntax validation command failed."
     fi
 
     log "PHP syntax validation passed."

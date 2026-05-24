@@ -41,8 +41,16 @@ $legacyPanel = [
     'api_token' => '',
     'panel_capabilities' => '',
 ];
+$legacyPanelWithToken = [
+    'api_token' => 'legacy-token',
+    'panel_capabilities' => json_encode([
+        'token_hash' => xuiCapabilityTokenHash(['api_token' => 'legacy-token']),
+        'modern_clients' => false,
+    ]),
+];
 assertSameValue(true, xuiShouldUseModernClientApi($modernPanel), 'selects v3.1 path from cached modern capability detection');
 assertSameValue(false, xuiShouldUseModernClientApi($legacyPanel), 'keeps legacy path when bearer token and modern capabilities are absent');
+assertSameValue(false, xuiShouldUseModernClientApi($legacyPanelWithToken), 'keeps cookie-based legacy path when token exists but modern clients are unavailable');
 
 $payload = xuiBuildModernClientPayload(
     'buyer@example.com',

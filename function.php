@@ -1248,7 +1248,8 @@ function DirectPayment($order_id, $image = 'images.jpg')
         if (intval($get_invoice['Service_time']) == 0)
             $get_invoice['Service_time'] = $textbotlang['users']['stateus']['Unlimited'];
         $textcreatuser = str_replace('{username}', $dataoutput['username'], $datatextbot['textafterpay']);
-        $textcreatuser = str_replace('{name_service}', $get_invoice['name_product'], $textcreatuser);
+        $serviceName = !empty($get_invoice['plan_id']) ? fixedPlanHtml($get_invoice['name_product']) : $get_invoice['name_product'];
+        $textcreatuser = str_replace('{name_service}', $serviceName, $textcreatuser);
         $textcreatuser = str_replace('{location}', $marzban_list_get['name_panel'], $textcreatuser);
         $textcreatuser = str_replace('{day}', $get_invoice['Service_time'], $textcreatuser);
         $textcreatuser = str_replace('{volume}', $get_invoice['Volume'], $textcreatuser);
