@@ -140,6 +140,62 @@ function get_clinets($username, $namepanel)
 
     return $response;
 }
+
+function xuiParseInboundIds($raw)
+{
+    if (is_array($raw)) {
+        $parts = $raw;
+    } else {
+        $raw = trim((string) $raw);
+        if ($raw === '') {
+            return [];
+        }
+        $parts = preg_split('/[\s,]+/', $raw);
+    }
+
+    $ids = [];
+    foreach ($parts as $part) {
+        $id = intval($part);
+        if ($id > 0) {
+            $ids[] = $id;
+        }
+    }
+
+    return array_values(array_unique($ids));
+}
+
+function xuiAddClientInbounds($namepanel, $usernameac, $Expire, $Total, $Flow, $subid, $inboundIds, $name_product, $note = "")
+{
+    $inboundIds = xuiParseInboundIds($inboundIds);
+    if (empty($inboundIds)) {
+        return [
+            'error' => 'No inbound IDs configured',
+        ];
+    }
+
+    $uuid = generateUUID();
+    $lastResponse = null;
+
+    foreach ($inboundIds as $inboundId) {
+        $response = addClient($namepanel, $usernameac, $Expire, $Total, $uuid, $Flow, $subid, $inboundId, $name_product, $note);
+        $lastResponse = $response;
+
+        if (!empty($response['error'])) {
+            return $response;
+        }
+        if (!empty($response['status']) && $response['status'] != 200) {
+            return $response;
+        }
+
+        $body = json_decode($response['body'] ?? '', true);
+        if (is_array($body) && array_key_exists('success', $body) && !$body['success']) {
+            return $response;
+        }
+    }
+
+    return $lastResponse;
+}
+
 function addClient($namepanel, $usernameac, $Expire, $Total, $Uuid, $Flow, $subid, $inboundid, $name_product, $note = "")
 {
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $namepanel, "select");

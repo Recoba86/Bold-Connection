@@ -66,4 +66,9 @@ assertSameValue(['vless://a', 'vless://b'], $parsedBase64, 'parses base64 subscr
 
 assertSameValue('https://iran.example.com:443', xuiNodeSubBase($nodeA), 'builds node subscription base URL');
 
+require_once __DIR__ . '/x-ui_single.php';
+assertSameValue([1], xuiParseInboundIds('1'), 'parses single inbound id');
+assertSameValue([1, 2, 3], xuiParseInboundIds('1,2,3'), 'parses comma-separated inbound ids');
+assertSameValue([1, 2, 3], xuiParseInboundIds("1\n2 3"), 'parses mixed separator inbound ids');
+
 echo "x-ui nodes tests passed\n";

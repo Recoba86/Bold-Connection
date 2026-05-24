@@ -150,7 +150,7 @@ class ManagePanel
             } else {
                 $inbounds = $Get_Data_Panel['inboundid'];
             }
-            $data_Output = addClient($Get_Data_Panel['name_panel'], $usernameC, $expire, $data_limit, generateUUID(), "", $subId, $inbounds, $Get_Data_Product['name_product'], $note);
+            $data_Output = xuiAddClientInbounds($Get_Data_Panel['name_panel'], $usernameC, $expire, $data_limit, "", $subId, $inbounds, $Get_Data_Product['name_product'], $note);
             if (!empty($data_Output['error'])) {
                 return array(
                     'status' => 'Unsuccessful',

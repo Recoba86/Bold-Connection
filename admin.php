@@ -4693,13 +4693,30 @@ $text_expie_agent
     update("marzban_panel", "val_usertest", $text, "name_panel", $user['Processing_value']);
     step('home', $from_id);
 } elseif ($text == "💎 تنظیم شناسه اینباند" && $adminrulecheck['rule'] == "administrator") {
-    sendmessage($from_id, "📌 شناسه اینباندی که می خواهید کانفیگ ازآن ساخته شود راارسال نمایید.  شناسه اینباند یک عدد چند رقمی است که در پنل  در صفحه اینباند ها ستون id  نوشته شده است
+    $typepanel = select("marzban_panel", "*", "name_panel", $user['Processing_value'], "select");
+    if (in_array($typepanel['type'], ['x-ui_single', 'alireza_single'])) {
+        sendmessage($from_id, "📌 شناسه اینباند(ها) را ارسال کنید.\n\nبرای یک اینباند: <code>1</code>\nبرای چند اینباند: <code>1,2,3</code>\n\nشناسه‌ها را از ستون ID در صفحه Inbounds پنل 3x-ui بردارید.", $backadmin, 'HTML');
+    } else {
+        sendmessage($from_id, "📌 شناسه اینباندی که می خواهید کانفیگ ازآن ساخته شود راارسال نمایید.  شناسه اینباند یک عدد چند رقمی است که در پنل  در صفحه اینباند ها ستون id  نوشته شده است
 
 ⚠️ در صورتی که پنل wgdashboard هستید باید نام کانفیگ را ارسال نمایید", $backadmin, 'HTML');
+    }
     step('getinboundiid', $from_id);
 } elseif ($user['step'] == "getinboundiid") {
-    sendmessage($from_id, "✅ شناسه اینباند با موفقیت ذخیره گردید", $optionX_ui_single, 'HTML');
-    update("marzban_panel", "inboundid", $text, "name_panel", $user['Processing_value']);
+    $typepanel = select("marzban_panel", "*", "name_panel", $user['Processing_value'], "select");
+    $valueToStore = $text;
+
+    if (in_array($typepanel['type'], ['x-ui_single', 'alireza_single'])) {
+        $ids = xuiParseInboundIds($text);
+        if (empty($ids)) {
+            sendmessage($from_id, "❌ حداقل یک شناسه اینباند عددی معتبر ارسال کنید.\nمثال: <code>1</code> یا <code>1,2,3</code>", $backadmin, 'HTML');
+            return;
+        }
+        $valueToStore = implode(',', $ids);
+    }
+
+    outtypepanel($typepanel, "✅ شناسه اینباند ذخیره شد: " . $valueToStore);
+    update("marzban_panel", "inboundid", $valueToStore, "name_panel", $user['Processing_value']);
     step('home', $from_id);
 } elseif ($text == "👤 ویرایش نام کاربری" && $adminrulecheck['rule'] == "administrator") {
     sendmessage($from_id, $textbotlang['Admin']['managepanel']['getusernamenew'], $backadmin, 'HTML');
@@ -10053,7 +10070,12 @@ elseif ($text == "🫣 مخفی کردن پنل برای یک کاربر" && $ad
         }
         $datainbound = json_encode($userdata['service_ids'], true);
     } elseif ($marzban_list_get['type'] == "x-ui_single" || $marzban_list_get['type'] == "alireza_single") {
-        $datainbound = $text;
+        $ids = xuiParseInboundIds($text);
+        if (empty($ids)) {
+            sendmessage($from_id, "❌ شناسه اینباند نامعتبر است. مثال: 1 یا 1,2,3", null, 'HTML');
+            return;
+        }
+        $datainbound = implode(',', $ids);
     } elseif ($marzban_list_get['type'] == "s_ui") {
         $data = GetClientsS_UI($text, $marzban_list_get['name_panel']);
         if (count($data) == 0) {
